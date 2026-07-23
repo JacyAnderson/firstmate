@@ -249,12 +249,14 @@ test_raised_budget_survives_a_slow_first_worktree() {
 
 # An unusable budget is refused by name and by value, before any window exists -
 # never silently reset to the default and never left to poll forever.
-# 1 is unusable because the loop needs two polls to confirm a worktree, and the
-# all-zero spellings are unusable in a platform-dependent way: `seq 1 00` yields
-# no iterations on GNU seq but counts down to two on BSD seq.
+# 1 is unusable because the loop needs two polls to confirm a worktree; the
+# all-zero spellings are unusable because `[` reads their leading zeros as
+# decimal, leaving a budget that polls zero times; and a value wider than `[`
+# can parse must still produce exactly one tailored refusal line, never bash's
+# own "integer expected" noise ahead of it.
 test_invalid_budget_is_refused_before_spawning() {
   local rec id bad out status n=0
-  for bad in abc 0 -5 '3s' 6.5 1 00 000; do
+  for bad in abc 0 -5 '3s' 6.5 1 00 000 86401 99999999999999999999; do
     n=$((n + 1))
     id="settle-budget-invalid-$n-z6"
     rec=$(make_settle_case "settle-budget-invalid-$n" "$id" 0)
@@ -263,14 +265,76 @@ test_invalid_budget_is_refused_before_spawning() {
     out=$(FM_SPAWN_WORKTREE_TIMEOUT="$bad" run_settle_spawn "$id")
     status=$?
     expect_code 1 "$status" "spawn should refuse FM_SPAWN_WORKTREE_TIMEOUT='$bad'"
-    assert_contains "$out" "FM_SPAWN_WORKTREE_TIMEOUT must be a whole number of seconds of at least 2, because the worktree-detection loop needs two polls to confirm the pane settled (got '$bad')" \
+    assert_contains "$out" "FM_SPAWN_WORKTREE_TIMEOUT must be a whole number of seconds from 2 to 86400, because the worktree-detection loop needs two polls to confirm the pane settled (got '$bad')" \
       "refusal did not name the offending FM_SPAWN_WORKTREE_TIMEOUT value '$bad'"
+    assert_not_contains "$out" "integer expected" \
+      "refusing '$bad' leaked bash's own numeric-comparison error ahead of the tailored refusal"
     assert_absent "$HOME_DIR/state/$id.meta" \
       "a refused budget must not leave task metadata behind for '$bad'"
     [ "$(pane_reads)" = 0 ] || \
       fail "spawn polled the pane $(pane_reads) times before refusing '$bad', expected 0"
   done
-  pass "a non-numeric, fractional, negative, all-zero, or below-two FM_SPAWN_WORKTREE_TIMEOUT is refused by value before any window is created"
+  pass "a non-numeric, fractional, negative, all-zero, out-of-range, or below-two FM_SPAWN_WORKTREE_TIMEOUT is refused, in one accurate line, before any window is created"
+}
+
+# --- non-polling spawns (FM_SPAWN_WORKTREE_TIMEOUT is not theirs) ------------
+#
+# The refusal is gated on the same predicate as the poll loop it guards
+# (SPAWN_POLLS_WORKTREE in bin/fm-spawn.sh), so a spawn that never runs
+# `treehouse get` must not inherit an unrelated exported value. The concrete
+# regression this protects is bin/fm-bootstrap.sh's secondmate liveness sweep,
+# which respawns dead secondmates with `fm-spawn.sh <id> --secondmate`: an
+# ambient FM_SPAWN_WORKTREE_TIMEOUT=1 must never break that sweep.
+#
+# The orca backend is the other non-polling spawn, and this file's scaffolding
+# cannot cover it: fm_backend_orca_runtime_check shells out to a real `orca
+# status --json` plus node before the spawn gets anywhere, so there is nothing
+# here a fake tmux can stand in for. It is left to the orca backend's own tests
+# rather than faked.
+
+# make_secondmate_home seeds the minimum a --secondmate spawn accepts as a
+# firstmate home: the home marker naming this task, AGENTS.md, and bin/. It is
+# a sibling of the active home, never inside it, since a secondmate home nested
+# in the active home is itself refused.
+make_secondmate_home() {
+  local case_dir=$1 id=$2 sm_home
+  sm_home="$case_dir/secondmate-home"
+  mkdir -p "$sm_home/bin" "$sm_home/data" "$sm_home/state" "$sm_home/config" "$sm_home/projects"
+  printf '%s\n' "$id" > "$sm_home/.fm-secondmate-home"
+  printf 'secondmate home\n' > "$sm_home/AGENTS.md"
+  printf '%s\n' "$sm_home"
+}
+
+run_secondmate_spawn() {
+  local id=$1 sm_home=$2
+  FM_ROOT_OVERRIDE='' FM_HOME="$HOME_DIR" \
+    FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+    FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
+    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
+    FM_FAKE_PANE_PATH="$sm_home" FM_FAKE_PANE_STALE="$sm_home" \
+    FM_FAKE_PANE_STALE_READS=0 FM_FAKE_PANE_COUNTFILE="$COUNTFILE" \
+    PATH="$FAKEBIN_DIR:$PATH" \
+    "$SPAWN" "$id" "$sm_home" --secondmate 2>&1
+}
+
+test_secondmate_spawn_ignores_an_invalid_budget() {
+  local rec id sm_home out status
+  id=settle-budget-secondmate-z7
+  rec=$(make_settle_case settle-budget-secondmate "$id" 0)
+  read_settle_record "$rec"
+  sm_home=$(make_secondmate_home "$TMP_ROOT/settle-budget-secondmate" "$id")
+
+  out=$(FM_SPAWN_WORKTREE_TIMEOUT=1 run_secondmate_spawn "$id" "$sm_home")
+  status=$?
+  assert_not_contains "$out" "FM_SPAWN_WORKTREE_TIMEOUT must be" \
+    "a --secondmate spawn was refused over a budget it never polls with"
+  expect_code 0 "$status" "a --secondmate spawn should proceed with an invalid FM_SPAWN_WORKTREE_TIMEOUT exported"
+  assert_contains "$out" "spawned $id" "secondmate spawn did not report success"
+  assert_grep "kind=secondmate" "$HOME_DIR/state/$id.meta" \
+    "secondmate spawn did not record its task metadata"
+  [ "$(pane_reads)" = 0 ] || \
+    fail "a --secondmate spawn polled the pane $(pane_reads) times, expected 0"
+  pass "an invalid FM_SPAWN_WORKTREE_TIMEOUT does not block a --secondmate spawn, which never runs the worktree poll loop"
 }
 
 test_single_stale_first_read_is_not_accepted
@@ -279,5 +343,6 @@ test_default_budget_is_sixty_seconds
 test_budget_override_is_honored_and_reported
 test_raised_budget_survives_a_slow_first_worktree
 test_invalid_budget_is_refused_before_spawning
+test_secondmate_spawn_ignores_an_invalid_budget
 
 echo "# all fm-spawn-worktree-settle tests passed"
