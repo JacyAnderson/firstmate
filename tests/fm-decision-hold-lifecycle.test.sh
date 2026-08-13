@@ -759,6 +759,94 @@ test_duplicate_archived_identity_is_order_independent() {
   pass "a duplicated archived identity resolves the same way in either ordering"
 }
 
+# The archive fallback originally ran only when the live backlog held NO record for
+# the id, so a stale live record short-circuited it: with a durably-resolved copy in
+# the archive and a closed-unresolved copy of the SAME identity still in the live
+# backlog's Done section, the gate refused "neither actively held nor durably
+# resolved" even though the decision WAS durably resolved, and the very same facts
+# passed once retention rotated the stale live copy out too. Retention position must
+# not decide the answer, so the archive is consulted whenever the live backlog does
+# not settle the question.
+test_stale_live_record_still_consults_the_archive() {
+  local home origin hold work rc
+  home=$(make_home stale-live-record)
+  origin=sample-stale-live-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate a stale live decision copy" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create stale-live-record origin"
+  write_origin_meta "$home" "$origin"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  printf '# Stale live review\n\nOne captain choice was resolved, archived, then re-held.\n' \
+    > "$home/data/$origin/report.md"
+
+  hold=$(run_decisions "$home" hold "$origin" placement \
+    --title "Choose the sample placement" --reason "captain placement choice pending" --repo sample) \
+    || fail "could not register the placement hold"
+  work=sample-placement-work
+  tasks_in "$home" add "$work" "Apply the selected sample placement" \
+    --kind ship --repo sample --blocked-by "$hold" >/dev/null \
+    || fail "could not create dependent placement work"
+  printf 'Place the sample forward.\n' > "$home/placement-decision.txt"
+  run_decisions "$home" resolve "$origin" placement \
+    --decision-file "$home/placement-decision.txt" --routed-to "$work" >/dev/null \
+    || fail "could not resolve the placement decision"
+  tasks_in "$home" prune --keep 0 --state "done" >/dev/null \
+    || fail "could not archive the resolved placement copy"
+
+  # The same key can be re-held once its resolution has left the live backlog, and
+  # that second hold can be closed with no resolution. This leaves the exact state
+  # the defect mishandled: a stale unresolved live record over an archived resolution.
+  run_decisions "$home" hold "$origin" placement \
+    --title "Choose the sample placement" --reason "captain placement choice pending" --repo sample \
+    >/dev/null || fail "could not re-hold the placement key after its resolution was archived"
+  tasks_in "$home" "done" "$hold" >/dev/null \
+    || fail "could not close the second placement hold without a resolution"
+  tasks_in "$home" show "$hold" --full >/dev/null 2>&1 \
+    || fail "stale-live fixture must leave an unresolved copy in the live backlog"
+  assert_grep "Resolution recorded by fm-decision-hold." "$home/data/done-archive.md" \
+    "stale-live fixture must leave the resolved copy in the archive"
+
+  set +e
+  run_decisions "$home" complete "$origin" placement \
+    > "$home/stale-complete.out" 2> "$home/stale-complete.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || fail "completion refused a decision resolved in the archive because a stale live copy existed: $(cat "$home/stale-complete.err")"
+  set +e
+  run_decisions "$home" verify "$origin" \
+    > "$home/stale-verify.out" 2> "$home/stale-verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || fail "verification refused a decision resolved in the archive because a stale live copy existed: $(cat "$home/stale-verify.err")"
+
+  # Rotating the stale live copy out changes nothing about the decisions, so it must
+  # not change the answer either.
+  tasks_in "$home" prune --keep 0 --state "done" >/dev/null \
+    || fail "could not rotate the stale live copy out"
+  if tasks_in "$home" show "$hold" --full >/dev/null 2>&1; then
+    fail "retention fixture did not remove the stale live copy"
+  fi
+  set +e
+  run_decisions "$home" complete "$origin" placement \
+    > "$home/rotated-complete.out" 2> "$home/rotated-complete.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || fail "completion answered differently once the stale live copy rotated out: $(cat "$home/rotated-complete.err")"
+  set +e
+  run_decisions "$home" verify "$origin" \
+    > "$home/rotated-verify.out" 2> "$home/rotated-verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || fail "verification answered differently once the stale live copy rotated out: $(cat "$home/rotated-verify.err")"
+
+  pass "a stale unresolved live record does not hide a durable resolution in the archive"
+}
+
 # An absent or unset archive key must behave exactly as before the fallback existed:
 # refuse a genuinely missing decision, without crashing and without silently passing.
 test_absent_archive_config_behaves_as_before() {
@@ -847,4 +935,5 @@ test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
 test_resolved_decision_in_done_archive_satisfies_the_gate
 test_duplicate_archived_identity_is_order_independent
+test_stale_live_record_still_consults_the_archive
 test_absent_archive_config_behaves_as_before

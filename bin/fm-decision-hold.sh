@@ -45,10 +45,14 @@
 # `tasks-axi show` reads only the active file. A durably-resolved captain
 # decision is therefore looked up in the active backlog first and in that archive
 # second, so a session that resolves more decisions than done_keep can still
-# complete, verify, and tear down its own investigations. Only a resolved record
-# is accepted from the archive, and it must carry the same resolution body an
-# active record must carry. An ACTIVE hold is never satisfiable from the archive:
-# verify_hold_active reads the live backlog alone.
+# complete, verify, and tear down its own investigations. The archive is consulted
+# whenever the live backlog does not itself settle the question - both when no live
+# record exists and when one exists but is neither an active captain hold nor a
+# durable resolution - so the answer never depends on where retention happens to
+# have left the records. Only a resolved record is accepted from the archive, and
+# it must carry the same resolution body an active record must carry. An ACTIVE
+# hold is never satisfiable from the archive: verify_hold_active reads the live
+# backlog alone.
 #
 # The archive path comes from `.tasks.toml`'s [markdown] archive key, resolved the
 # way tasks-axi resolves it, relative to FM_HOME. An absent config file or absent
@@ -183,19 +187,18 @@ load_archive_path() {
   esac
 }
 
-ARCHIVE_SHOW=''
 ARCHIVE_RESOLVED=0
 # Returns 0 when the Done archive holds at least one record carrying <id>, and 1
 # when this home has no archive or the archive holds no such record. Retention can
 # archive the same identity more than once and `tasks-axi show` reports only the
-# first match, so every archived record for the id is examined: ARCHIVE_RESOLVED
-# is 1 when any of them clears record_is_resolved, which makes the answer
-# independent of the order the records sit in the archive. ARCHIVE_SHOW carries the
-# record that decided the answer. Refuses rather than reporting absence when an
-# archive exists but cannot be read as a backlog file.
+# first match, so every archived record for the id is examined: ARCHIVE_RESOLVED,
+# the only value a caller reads, is 1 when any of them clears record_is_resolved,
+# which makes the answer independent of the order the records sit in the archive.
+# Finding a record and finding a resolved one are distinct: the return code reports
+# the first, ARCHIVE_RESOLVED the second. Refuses rather than reporting absence
+# when an archive exists but cannot be read as a backlog file.
 load_archive_show() {  # <id>
-  local id=$1 archive snapdir snapshot show rc
-  ARCHIVE_SHOW=''
+  local id=$1 archive snapdir snapshot show rc found=0
   ARCHIVE_RESOLVED=0
   load_archive_path
   archive=$ARCHIVE_PATH
@@ -245,14 +248,14 @@ load_archive_show() {  # <id>
     rc=$?
     set -e
     [ "$rc" -eq 0 ] || continue
-    ARCHIVE_SHOW=$show
+    found=1
     if record_is_resolved "$show"; then
       ARCHIVE_RESOLVED=1
       break
     fi
   done
   rm -rf "$snapdir"
-  [ -n "$ARCHIVE_SHOW" ] || return 1
+  [ "$found" = 1 ] || return 1
   return 0
 }
 
@@ -338,8 +341,9 @@ verify_hold_resolved() {  # <hold-id>
 }
 
 verify_hold_durable() {  # <hold-id>
-  local id=$1 show state held kind hold_kind
+  local id=$1 show state held kind hold_kind live=0
   if show=$(task_show "$id"); then
+    live=1
     state=$(show_field "$show" state)
     held=$(show_field "$show" held)
     kind=$(show_field "$show" kind)
@@ -348,17 +352,21 @@ verify_hold_durable() {  # <hold-id>
       return 0
     fi
     record_is_resolved "$show" && return 0
-    fail "captain decision $id is neither actively held nor durably resolved"
   fi
-  # Absent from the live backlog: retention may have rotated a resolved decision
-  # into the Done archive. Only a resolved record counts there, and it must carry
-  # the same resolution body an active record must carry. Retention can archive one
-  # identity repeatedly, so any archived record clearing that bar resolves the id
-  # regardless of where it sits among the others.
+  # The live record is absent, or exists but is neither an active captain hold nor a
+  # durable resolution. Either way retention may hold a resolved copy of this
+  # identity in the Done archive, so the archive is consulted before refusing:
+  # otherwise the gate's answer would depend on where retention happens to have left
+  # the records. Only a resolved record counts there, and it must carry the same
+  # resolution body an active record must carry. Retention can archive one identity
+  # repeatedly, so any archived record clearing that bar resolves the id regardless
+  # of where it sits among the others.
   if load_archive_show "$id"; then
     [ "$ARCHIVE_RESOLVED" = 1 ] && return 0
     fail "archived captain decision $id has no durable resolution record"
   fi
+  [ "$live" = 0 ] \
+    || fail "captain decision $id is neither actively held nor durably resolved"
   fail "captain decision $id is absent from $FM_HOME/data/backlog.md"
 }
 

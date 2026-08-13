@@ -79,9 +79,29 @@ $ bin/fm-decision-hold.sh verify incident-scope-review                          
 verified: incident-scope-review unresolved-decision inventory
 ```
 
+The real-world failure shape is confirmed live rather than only synthetic.
+On 2026-08-13 two scout closeouts were refused by this exact defect.
+The first printed `fm-decision-hold: captain decision ds5-build-vs-buy-decision-codegen-experiment-funding is absent from data/backlog.md`, followed by `REFUSED: scout task ds5-build-vs-buy has not passed the unresolved-decision completion gate.`, and `emotion-scope-division` was refused the same way.
+Both holds were durably resolved and sat in `data/done-archive.md` marked `[x]` with `(done 2026-08-13)`, carrying full resolution bodies, digests, and routed identities.
+The regression drives that same shape - a hold resolved, rotated into the archive by the backlog's own retention, and its origin scout torn down afterward - so it covers the real failure rather than a fabricated archive fixture.
+
 `tasks-axi` 0.2.5 exposes no archive query: `show` and `list` read one backlog file, and `--file` pointed at the configured archive is refused with `Archive path must not be the active backlog path`.
-The fallback therefore queries a private throwaway snapshot of the archive whose `## Archived <date>` headings are normalized to `## Done`, which keeps tasks-axi's own parser as the only record parser instead of hand-parsing markdown.
+The fallback therefore stages one private throwaway single-record snapshot per archived record carrying the id, each under a `## Done` heading, and queries them through `tasks-axi show --file`.
+That keeps tasks-axi's own parser as the only parser of a record instead of hand-parsing markdown: the split decides only where records start, using the fact that tasks-axi always indents body lines, so an unindented `- [` line is a boundary and never body prose.
+Per-record staging is what makes the answer independent of archive ordering, because `show` reports only the first record carrying an id while retention can archive one identity more than once; the id counts as durably resolved when any archived record for it clears the shared bar.
 Verified against 0.2.5: a normalized snapshot returns the identical `show --full` field set for an archived resolved record, including the full `body`, and an archived still-open hold stays unparseable there, so it cannot masquerade as resolved.
+
+The archive is consulted whenever the live backlog does not settle the question, not only when the live backlog has no record at all.
+A live record that is neither an active captain hold nor a durable resolution therefore falls through to the archive instead of refusing outright.
+Without that, a stale live copy of an identity whose resolution had already rotated into the archive made the gate refuse `neither actively held nor durably resolved` for a decision that was in fact durably resolved, and the identical facts passed once retention rotated the stale copy out too.
+Retention position must not decide the answer.
+
+Two consequences are intentional and stated here rather than left for a reader to discover.
+First, the fallback removes an implicit fail-closed on an unreadable live backlog: tasks-axi cannot distinguish a corrupt backlog from an empty one, so a corrupt `data/backlog.md` now lets `verify` succeed from the archived record alone.
+That is the right answer, because an archived resolution record is genuine evidence that the decision was resolved, and the fail-closed requirement was scoped to the archive rather than to the live backlog.
+Second, `command_hold`'s "already durably resolved; use a new decision key" guard still reads only the live backlog, so a resolved key can be re-held once its record has been archived.
+Closing that would change when a decision key may be reopened, which is semantic policy owned by `.agents/skills/decision-hold-lifecycle/SKILL.md`, so it is a known related gap outside this change's scope.
+It is also what lets the ordering and stale-record regressions build their fixtures through the real script instead of hand-writing archive files.
 
 ## Verification record
 
@@ -89,13 +109,19 @@ Verification date: 2026-07-14.
 Additional quoted `blocked_by` regression verification date: 2026-07-17.
 Plural blocker-readiness and mixed-home projection verification date: 2026-07-22.
 Done-archive lookup regression verification date: 2026-08-13, with ShellCheck 0.11.0 and tasks-axi 0.2.5.
-Two backend scripts, `tests/fm-backend-orca.test.sh` and `tests/fm-backend.test.sh`, failed on that date both on the change branch and on the unmodified base, so they are pre-existing and unrelated to the archive lookup.
+Two backend scripts fail for reasons that have nothing to do with the archive lookup, and they fail on unmodified base code with no part of this change present.
+That was re-verified by cloning main at `4bf9c08` into a throwaway checkout and running the two suites there: `tests/fm-backend.test.sh` fails `not ok - fm-send --key: old vs new exit code: expected exit 1, got 0`, and `tests/fm-backend-orca.test.sh` fails `not ok - Orca spawn should fail when metadata cannot be written`.
+Both are therefore pre-existing and not caused by this change.
 
 The focused end-to-end regression uses only synthetic `sample` identities and decision text.
 It begins with a completed investigation and visual review whose genuine unresolved choice exists only in the report.
 The initial Bearings snapshot correctly has no open decision, and the new teardown gate refuses to erase the source.
 A later regression covers tasks-axi's quoted multi-entry `blocked_by` output so `resolve` matches the first, middle, and last ids and rejects a genuinely absent id.
-The Done-archive regression drives the incident above through the backlog's own `tasks-axi prune` retention rather than hand-moving records, and asserts all four boundaries: a resolved archived decision passes, an archived record stripped of its resolution markers still refuses, an open hold present only in the archive satisfies neither the active-hold check nor completion, and an absent, missing, or corrupt archive refuses exactly as before instead of passing.
+Three Done-archive regressions drive the incident above through the backlog's own `tasks-axi prune` retention rather than hand-moving records, and together assert six boundaries.
+`test_resolved_decision_in_done_archive_satisfies_the_gate` covers three: a resolved archived decision passes, an archived record stripped of its resolution markers still refuses with the archive-specific refusal, and an open hold present only in the archive satisfies neither the active-hold check nor completion.
+`test_duplicate_archived_identity_is_order_independent` covers the ordering boundary, building both archive orderings of one duplicated identity through the real hold, resolve, and prune lifecycle and requiring the same answer from each.
+`test_stale_live_record_still_consults_the_archive` covers the stale-live-record boundary, pairing an archived resolution with an unresolved live copy of the same identity and requiring that the answer not change when retention later rotates that live copy out.
+`test_absent_archive_config_behaves_as_before` covers the last: an absent, missing, empty, or corrupt archive refuses exactly as before instead of passing, with the corrupt case asserted on its own `is not a text backlog file` refusal so it cannot be satisfied by an ordinary absence.
 
 The final verification commands and their exact summarized outputs follow.
 
@@ -111,6 +137,8 @@ ok - terminal single-owner stale status decisions do not block empty inventory
 ok - main-home and secondmate-home captain holds remain correctly routed
 ok - resolve matches first/middle/last in quoted blocked_by and rejects a genuinely absent id
 ok - a resolved decision in the Done archive satisfies the gate while open and unresolved records still refuse
+ok - a duplicated archived identity resolves the same way in either ordering
+ok - a stale unresolved live record does not hide a durable resolution in the archive
 ok - an absent, missing, or corrupt archive refuses exactly as before rather than passing
 
 $ bash tests/fm-fleet-snapshot-view.test.sh
