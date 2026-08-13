@@ -53,11 +53,15 @@
 # The archive path comes from `.tasks.toml`'s [markdown] archive key, resolved the
 # way tasks-axi resolves it, relative to FM_HOME. An absent config file or absent
 # archive key means there is no archive to consult. Because `tasks-axi show
-# --file` refuses the configured archive path itself, the lookup queries a
-# private throwaway snapshot whose `## Archived <date>` headings are normalized
-# to `## Done`, which keeps tasks-axi's own parser as the only record parser. A
-# missing archive is an ordinary absence; an unreadable, non-regular, non-text, or
-# structurally unrecognizable archive refuses instead of reading as absence.
+# --file` refuses the configured archive path itself, and because `show` returns
+# only the first record carrying an id while retention can archive the same
+# identity more than once, the lookup stages one private throwaway single-record
+# snapshot per archived record and queries each under a `## Done` heading. That
+# keeps tasks-axi's own parser as the only record parser, and it makes the answer
+# independent of archive ordering: the id is durably resolved when any archived
+# record for it clears the resolution bar. A missing archive is an ordinary
+# absence; an unreadable, non-regular, non-text, or structurally unrecognizable
+# archive refuses instead of reading as absence.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -180,13 +184,19 @@ load_archive_path() {
 }
 
 ARCHIVE_SHOW=''
-# Sets ARCHIVE_SHOW to a `tasks-axi show --full` record for <id> read from the Done
-# archive and returns 0, or clears it and returns 1 when this home has no archive
-# or the archive holds no such record. Refuses rather than reporting absence when
-# an archive exists but cannot be read as a backlog file.
+ARCHIVE_RESOLVED=0
+# Returns 0 when the Done archive holds at least one record carrying <id>, and 1
+# when this home has no archive or the archive holds no such record. Retention can
+# archive the same identity more than once and `tasks-axi show` reports only the
+# first match, so every archived record for the id is examined: ARCHIVE_RESOLVED
+# is 1 when any of them clears record_is_resolved, which makes the answer
+# independent of the order the records sit in the archive. ARCHIVE_SHOW carries the
+# record that decided the answer. Refuses rather than reporting absence when an
+# archive exists but cannot be read as a backlog file.
 load_archive_show() {  # <id>
-  local id=$1 archive snapshot rc
+  local id=$1 archive snapdir snapshot show rc
   ARCHIVE_SHOW=''
+  ARCHIVE_RESOLVED=0
   load_archive_path
   archive=$ARCHIVE_PATH
   [ -n "$archive" ] || return 1
@@ -200,21 +210,49 @@ load_archive_show() {  # <id>
     || fail "the backlog archive is not a text backlog file: $archive"
   grep -q '^##[[:space:]]' "$archive" \
     || fail "the backlog archive has no recognizable backlog sections: $archive"
-  snapshot=$(mktemp "${TMPDIR:-/tmp}/fm-decision-hold-archive.XXXXXX") \
+  snapdir=$(mktemp -d "${TMPDIR:-/tmp}/fm-decision-hold-archive.XXXXXX") \
     || fail "could not stage a read-only snapshot of $archive"
-  if ! sed 's/^##[[:space:]]*Archived\([[:space:]].*\)*$/## Done/' "$archive" > "$snapshot"; then
-    rm -f "$snapshot"
+  # Split on top-level record lines only. A record body is always indented, so an
+  # unindented `- [` line is a record boundary and never body prose. Each candidate
+  # block is staged alone under a `## Done` heading and handed to tasks-axi, which
+  # stays the only parser of the record itself: this decides where records start,
+  # never what they mean. An archived still-open `- [ ]` hold remains unparseable
+  # under a Done heading, so it cannot masquerade as resolved.
+  if ! awk -v id="$id" -v dir="$snapdir" '
+    /^##[[:space:]]/ { if (out != "") { close(out); out = "" } ; next }
+    /^-[[:space:]]*\[/ {
+      if (out != "") { close(out); out = "" }
+      head = $0
+      sub(/^-[[:space:]]*\[[^\]]*\][[:space:]]*/, "", head)
+      split(head, parts, /[[:space:]]/)
+      if (parts[1] == id) {
+        n++
+        out = dir "/record-" n ".md"
+        print "## Done" > out
+        print $0 > out
+      }
+      next
+    }
+    out != "" { print > out }
+  ' "$archive"; then
+    rm -rf "$snapdir"
     fail "could not stage a read-only snapshot of $archive"
   fi
-  set +e
-  ARCHIVE_SHOW=$(tasks_axi show "$id" --file "$snapshot" --full 2>/dev/null)
-  rc=$?
-  set -e
-  rm -f "$snapshot"
-  if [ "$rc" -ne 0 ]; then
-    ARCHIVE_SHOW=''
-    return 1
-  fi
+  for snapshot in "$snapdir"/record-*.md; do
+    [ -f "$snapshot" ] || continue
+    set +e
+    show=$(tasks_axi show "$id" --file "$snapshot" --full 2>/dev/null)
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || continue
+    ARCHIVE_SHOW=$show
+    if record_is_resolved "$show"; then
+      ARCHIVE_RESOLVED=1
+      break
+    fi
+  done
+  rm -rf "$snapdir"
+  [ -n "$ARCHIVE_SHOW" ] || return 1
   return 0
 }
 
@@ -314,9 +352,11 @@ verify_hold_durable() {  # <hold-id>
   fi
   # Absent from the live backlog: retention may have rotated a resolved decision
   # into the Done archive. Only a resolved record counts there, and it must carry
-  # the same resolution body an active record must carry.
+  # the same resolution body an active record must carry. Retention can archive one
+  # identity repeatedly, so any archived record clearing that bar resolves the id
+  # regardless of where it sits among the others.
   if load_archive_show "$id"; then
-    record_is_resolved "$ARCHIVE_SHOW" && return 0
+    [ "$ARCHIVE_RESOLVED" = 1 ] && return 0
     fail "archived captain decision $id has no durable resolution record"
   fi
   fail "captain decision $id is absent from $FM_HOME/data/backlog.md"

@@ -609,7 +609,12 @@ test_resolved_decision_in_done_archive_satisfies_the_gate() {
 
   # An archived record must clear the same resolution bar an active record clears:
   # mere presence of the identity in the archive is not durable resolution.
+  #
+  # Teardown deleted the origin metadata, so the completed inventory is restored
+  # before this `verify`: without it verify refuses at "has no completed
+  # unresolved-decision inventory" and never reaches the archive lookup at all.
   write_origin_meta "$home" "$origin"
+  printf 'decisions_reviewed=1\ndecision_keys=rotation\n' >> "$home/state/$origin.meta"
   printf 'done: report complete\n' > "$home/state/$origin.status"
   perl -0pi -e 's/^  Resolution recorded by fm-decision-hold\.\n//m' "$archive" \
     || fail "could not strip the archived resolution marker"
@@ -619,10 +624,18 @@ test_resolved_decision_in_done_archive_satisfies_the_gate() {
     > "$home/stripped-verify.out" 2> "$home/stripped-verify.err"; then
     fail "verification accepted an archived record with no resolution body"
   fi
+  # The archive-specific refusal proves the archive lookup actually ran and judged
+  # the record, rather than an earlier gate refusing for an unrelated reason.
+  assert_grep "archived captain decision $hold has no durable resolution record" \
+    "$home/stripped-verify.err" \
+    "verification must refuse the archived record on its missing resolution body"
   if run_decisions "$home" complete "$origin" rotation \
     > "$home/stripped-complete.out" 2> "$home/stripped-complete.err"; then
     fail "completion accepted an archived record with no resolution body"
   fi
+  assert_grep "archived captain decision $hold has no durable resolution record" \
+    "$home/stripped-complete.err" \
+    "completion must refuse the archived record on its missing resolution body"
 
   # An OPEN hold is a live-backlog fact. Finding one only in the archive must never
   # satisfy the active-hold check that guards `resolve`.
@@ -654,12 +667,107 @@ test_resolved_decision_in_done_archive_satisfies_the_gate() {
   pass "a resolved decision in the Done archive satisfies the gate while open and unresolved records still refuse"
 }
 
+# Archives one durably-resolved copy and one closed-unresolved copy of the SAME
+# decision identity into <home>'s Done archive, in the requested order, driving the
+# real lifecycle: retention rotates a resolved decision out, the same key can then
+# be held again because the live backlog no longer carries it, and that second hold
+# can be closed without a resolution and rotated out in turn.
+archive_duplicate_identity() {  # <home> <origin> <key> <order: resolved-first|unresolved-first>
+  local home=$1 origin=$2 key=$3 order=$4 hold work
+  work="sample-$key-work"
+
+  if [ "$order" = unresolved-first ]; then
+    hold=$(run_decisions "$home" hold "$origin" "$key" \
+      --title "Choose the sample $key" --reason "captain $key choice pending" --repo sample) \
+      || fail "could not register the first $key hold"
+    tasks_in "$home" "done" "$hold" >/dev/null \
+      || fail "could not close the $key hold without a resolution"
+    tasks_in "$home" prune --keep 0 --state "done" >/dev/null \
+      || fail "could not archive the unresolved $key copy"
+  fi
+
+  hold=$(run_decisions "$home" hold "$origin" "$key" \
+    --title "Choose the sample $key" --reason "captain $key choice pending" --repo sample) \
+    || fail "could not register the resolvable $key hold"
+  tasks_in "$home" add "$work" "Apply the selected sample $key" \
+    --kind ship --repo sample --blocked-by "$hold" >/dev/null \
+    || fail "could not create dependent $key work"
+  printf 'Take the %s branch.\n' "$key" > "$home/$key-decision.txt"
+  run_decisions "$home" resolve "$origin" "$key" \
+    --decision-file "$home/$key-decision.txt" --routed-to "$work" >/dev/null \
+    || fail "could not resolve the $key decision"
+  tasks_in "$home" prune --keep 0 --state "done" >/dev/null \
+    || fail "could not archive the resolved $key copy"
+
+  if [ "$order" = resolved-first ]; then
+    hold=$(run_decisions "$home" hold "$origin" "$key" \
+      --title "Choose the sample $key" --reason "captain $key choice pending" --repo sample) \
+      || fail "could not re-register the $key hold after its resolution was archived"
+    tasks_in "$home" "done" "$hold" >/dev/null \
+      || fail "could not close the second $key hold without a resolution"
+    tasks_in "$home" prune --keep 0 --state "done" >/dev/null \
+      || fail "could not archive the unresolved $key copy"
+  fi
+
+  if tasks_in "$home" show "$hold" --full >/dev/null 2>&1; then
+    fail "duplicate fixture left a $key copy in the active backlog"
+  fi
+  printf '%s\n' "$hold"
+}
+
+# `tasks-axi show` reports only the FIRST record carrying an id, so a single show
+# call against the archive let record ordering decide the gate's answer: the same
+# two archived copies of one identity passed when the resolved copy happened to
+# come first and refused when it came second. The lookup must examine every
+# archived record for the id, so both orderings answer identically.
+test_duplicate_archived_identity_is_order_independent() {
+  local home origin hold order rc
+  for order in resolved-first unresolved-first; do
+    home=$(make_home "duplicate-$order")
+    origin="sample-dup-$order-review"
+    mkdir -p "$home/data/$origin"
+    tasks_in "$home" add "$origin" "Investigate duplicated sample decisions" \
+      --kind scout --repo sample --start >/dev/null \
+      || fail "could not create duplicate-identity origin ($order)"
+    write_origin_meta "$home" "$origin"
+    printf 'done: report complete\n' > "$home/state/$origin.status"
+    printf '# Duplicate review\n\nOne captain choice was resolved and archived twice.\n' \
+      > "$home/data/$origin/report.md"
+
+    hold=$(archive_duplicate_identity "$home" "$origin" branch "$order")
+    [ "$(grep -c -F -- "- [x] $hold - " "$home/data/done-archive.md")" = 2 ] \
+      || fail "duplicate fixture did not archive two copies of $hold ($order)"
+
+    set +e
+    run_decisions "$home" complete "$origin" branch \
+      > "$home/dup-complete.out" 2> "$home/dup-complete.err"
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] \
+      || fail "completion answered differently for $order ordering: $(cat "$home/dup-complete.err")"
+
+    printf 'decisions_reviewed=1\ndecision_keys=branch\n' >> "$home/state/$origin.meta"
+    set +e
+    run_decisions "$home" verify "$origin" \
+      > "$home/dup-verify.out" 2> "$home/dup-verify.err"
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] \
+      || fail "verification answered differently for $order ordering: $(cat "$home/dup-verify.err")"
+  done
+
+  pass "a duplicated archived identity resolves the same way in either ordering"
+}
+
 # An absent or unset archive key must behave exactly as before the fallback existed:
 # refuse a genuinely missing decision, without crashing and without silently passing.
 test_absent_archive_config_behaves_as_before() {
   local home origin
-  home=$(make_home no-archive-config)
-  origin=sample-no-archive-review
+  # The home directory name is embedded in refusal messages, so it deliberately
+  # avoids the substring "archive": otherwise an assertion on that word would match
+  # any refusal that merely names a path under this home.
+  home=$(make_home unconfigured-retention)
+  origin=sample-retention-only-review
   mkdir -p "$home/data/$origin"
   cat > "$home/.tasks.toml" <<'EOF'
 backend = "markdown"
@@ -717,8 +825,10 @@ EOF
     > "$home/corrupt-archive.out" 2> "$home/corrupt-archive.err"; then
     fail "completion passed while the configured archive was unreadable as a backlog"
   fi
-  assert_grep "archive" "$home/corrupt-archive.err" \
-    "a corrupt archive must name the archive as the refusal reason"
+  assert_grep "is not a text backlog file" "$home/corrupt-archive.err" \
+    "a corrupt archive must refuse as unreadable rather than as an ordinary absence"
+  assert_no_grep "absent from" "$home/corrupt-archive.err" \
+    "a corrupt archive must not refuse as if the decision were merely absent"
   assert_no_grep "decisions_reviewed=1" "$home/state/$origin.meta" \
     "a corrupt archive recorded a false completion attestation"
 
@@ -736,4 +846,5 @@ test_terminal_single_owner_status_decision_does_not_block_empty_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
 test_resolved_decision_in_done_archive_satisfies_the_gate
+test_duplicate_archived_identity_is_order_independent
 test_absent_archive_config_behaves_as_before
