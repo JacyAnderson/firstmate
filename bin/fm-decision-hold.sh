@@ -37,6 +37,27 @@
 # It writes the captain decision and routed identities into the hold body, clears
 # those dependency edges, and only then marks the hold Done. A failure before the
 # final step leaves the captain hold open.
+#
+# Durably-resolved lookup and the Done archive
+#
+# The backlog's own retention (`.tasks.toml` [markdown] done_keep) rotates closed
+# items out of the active backlog file into the configured archive, and
+# `tasks-axi show` reads only the active file. A durably-resolved captain
+# decision is therefore looked up in the active backlog first and in that archive
+# second, so a session that resolves more decisions than done_keep can still
+# complete, verify, and tear down its own investigations. Only a resolved record
+# is accepted from the archive, and it must carry the same resolution body an
+# active record must carry. An ACTIVE hold is never satisfiable from the archive:
+# verify_hold_active reads the live backlog alone.
+#
+# The archive path comes from `.tasks.toml`'s [markdown] archive key, resolved the
+# way tasks-axi resolves it, relative to FM_HOME. An absent config file or absent
+# archive key means there is no archive to consult. Because `tasks-axi show
+# --file` refuses the configured archive path itself, the lookup queries a
+# private throwaway snapshot whose `## Archived <date>` headings are normalized
+# to `## Done`, which keeps tasks-axi's own parser as the only record parser. A
+# missing archive is an ordinary absence; an unreadable, non-regular, non-text, or
+# structurally unrecognizable archive refuses instead of reading as absence.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -110,6 +131,93 @@ task_show() {  # <id>
   tasks_axi show "$1" --full 2>/dev/null
 }
 
+# Refusals below run through fail, which exits. A subshell cannot exit this
+# script, so every archive helper reports through a global instead of stdout: a
+# refusal captured by command substitution would collapse into an empty result and
+# read as a legitimate absence, which is exactly the confusion this fix removes.
+
+ARCHIVE_PATH=''
+# Sets ARCHIVE_PATH to the configured Done-archive path, or to the empty string
+# when this home has no archive. Reads only the [markdown] table so an `archive`
+# key in another table cannot be mistaken for it, and refuses a present-but-empty
+# or unquoted value rather than treating a malformed config as an absent archive.
+load_archive_path() {
+  local config="$FM_HOME/.tasks.toml" value
+  ARCHIVE_PATH=''
+  [ -f "$config" ] || return 0
+  value=$(awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*\[/ {
+      section = $0
+      sub(/^[[:space:]]*\[[[:space:]]*/, "", section)
+      sub(/[[:space:]]*\].*$/, "", section)
+      in_markdown = (section == "markdown")
+      next
+    }
+    in_markdown && /^[[:space:]]*archive[[:space:]]*=/ {
+      value = $0
+      sub(/^[[:space:]]*archive[[:space:]]*=[[:space:]]*/, "", value)
+      if (match(value, /^["\047][^"\047]*["\047]/)) {
+        printf "value\t%s\n", substr(value, RSTART + 1, RLENGTH - 2)
+      } else {
+        print "malformed"
+      }
+      exit
+    }
+  ' "$config" 2>/dev/null) || fail "could not read the backlog archive setting in $config"
+  case "$value" in
+    '') return 0 ;;
+    "value	"*)
+      value=${value#value	}
+      [ -n "$value" ] || fail "the backlog archive setting in $config is empty"
+      case "$value" in
+        /*) ARCHIVE_PATH=$value ;;
+        *) ARCHIVE_PATH="$FM_HOME/$value" ;;
+      esac
+      ;;
+    *) fail "the backlog archive setting in $config is not a quoted path" ;;
+  esac
+}
+
+ARCHIVE_SHOW=''
+# Sets ARCHIVE_SHOW to a `tasks-axi show --full` record for <id> read from the Done
+# archive and returns 0, or clears it and returns 1 when this home has no archive
+# or the archive holds no such record. Refuses rather than reporting absence when
+# an archive exists but cannot be read as a backlog file.
+load_archive_show() {  # <id>
+  local id=$1 archive snapshot rc
+  ARCHIVE_SHOW=''
+  load_archive_path
+  archive=$ARCHIVE_PATH
+  [ -n "$archive" ] || return 1
+  [ -e "$archive" ] || return 1
+  [ -f "$archive" ] || fail "the backlog archive is not a regular file: $archive"
+  [ -r "$archive" ] || fail "the backlog archive is not readable: $archive"
+  # An empty archive unambiguously holds no records, so it is an absence like a
+  # missing file. A non-empty file that is not a text backlog is not an absence.
+  [ -s "$archive" ] || return 1
+  [ "$(LC_ALL=C tr -d -c '\000' < "$archive" | wc -c | tr -d ' ')" = 0 ] \
+    || fail "the backlog archive is not a text backlog file: $archive"
+  grep -q '^##[[:space:]]' "$archive" \
+    || fail "the backlog archive has no recognizable backlog sections: $archive"
+  snapshot=$(mktemp "${TMPDIR:-/tmp}/fm-decision-hold-archive.XXXXXX") \
+    || fail "could not stage a read-only snapshot of $archive"
+  if ! sed 's/^##[[:space:]]*Archived\([[:space:]].*\)*$/## Done/' "$archive" > "$snapshot"; then
+    rm -f "$snapshot"
+    fail "could not stage a read-only snapshot of $archive"
+  fi
+  set +e
+  ARCHIVE_SHOW=$(tasks_axi show "$id" --file "$snapshot" --full 2>/dev/null)
+  rc=$?
+  set -e
+  rm -f "$snapshot"
+  if [ "$rc" -ne 0 ]; then
+    ARCHIVE_SHOW=''
+    return 1
+  fi
+  return 0
+}
+
 show_field() {  # <show-output> <field>
   local output=$1 field=$2
   printf '%s\n' "$output" | sed -n "s/^  $field: //p" | head -1
@@ -170,9 +278,10 @@ verify_hold_active() {  # <hold-id>
   [ "$hold_kind" = captain ] || fail "backlog item $id is not held for the captain"
 }
 
-verify_hold_resolved() {  # <hold-id>
-  local id=$1 show state kind body
-  show=$(task_show "$id") || return 1
+# The single test for a durably-resolved captain decision, applied identically to
+# an active-backlog record and an archived one.
+record_is_resolved() {  # <show-output>
+  local show=$1 state kind body
   state=$(show_field "$show" state)
   kind=$(show_field "$show" kind)
   body=$(show_field "$show" body)
@@ -184,23 +293,33 @@ verify_hold_resolved() {  # <hold-id>
   return 1
 }
 
+verify_hold_resolved() {  # <hold-id>
+  local id=$1 show
+  show=$(task_show "$id") || return 1
+  record_is_resolved "$show"
+}
+
 verify_hold_durable() {  # <hold-id>
-  local id=$1 show state held kind hold_kind body
-  show=$(task_show "$id") || fail "captain decision $id is absent from $FM_HOME/data/backlog.md"
-  state=$(show_field "$show" state)
-  held=$(show_field "$show" held)
-  kind=$(show_field "$show" kind)
-  hold_kind=$(show_field "$show" hold_kind)
-  body=$(show_field "$show" body)
-  if [ "$state" = queued ] && [ "$held" = yes ] && [ "$kind" = captain ] && [ "$hold_kind" = captain ]; then
-    return 0
+  local id=$1 show state held kind hold_kind
+  if show=$(task_show "$id"); then
+    state=$(show_field "$show" state)
+    held=$(show_field "$show" held)
+    kind=$(show_field "$show" kind)
+    hold_kind=$(show_field "$show" hold_kind)
+    if [ "$state" = queued ] && [ "$held" = yes ] && [ "$kind" = captain ] && [ "$hold_kind" = captain ]; then
+      return 0
+    fi
+    record_is_resolved "$show" && return 0
+    fail "captain decision $id is neither actively held nor durably resolved"
   fi
-  if [ "$state" = "done" ] && [ "$kind" = captain ]; then
-    case "$body" in
-      *"Resolution recorded by fm-decision-hold."*"Routed work:"*) return 0 ;;
-    esac
+  # Absent from the live backlog: retention may have rotated a resolved decision
+  # into the Done archive. Only a resolved record counts there, and it must carry
+  # the same resolution body an active record must carry.
+  if load_archive_show "$id"; then
+    record_is_resolved "$ARCHIVE_SHOW" && return 0
+    fail "archived captain decision $id has no durable resolution record"
   fi
-  fail "captain decision $id is neither actively held nor durably resolved"
+  fail "captain decision $id is absent from $FM_HOME/data/backlog.md"
 }
 
 verify_resolution_identity() {

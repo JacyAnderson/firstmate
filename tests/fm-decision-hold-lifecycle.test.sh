@@ -550,6 +550,181 @@ test_resolve_matches_quoted_blocked_by_edges() {
   pass "resolve matches first/middle/last in quoted blocked_by and rejects a genuinely absent id"
 }
 
+# The backlog's own retention rotates closed items into the configured archive, and
+# `tasks-axi show` reads only the active backlog file. Before the archive fallback,
+# a session that resolved more decisions than done_keep locked its own investigations
+# open: `complete` and `verify` reported the resolved decision "absent from
+# .../data/backlog.md", and teardown could not clean up either.
+#
+# The gate must find a durably-resolved decision in the archive while keeping every
+# other guarantee: an archived record without the resolution markers still refuses,
+# an OPEN hold present only in the archive never satisfies the active-hold check,
+# and a home with no configured archive behaves exactly as before.
+test_resolved_decision_in_done_archive_satisfies_the_gate() {
+  local home origin hold archive keep_hold show
+  home=$(make_home archived-resolution)
+  origin=sample-archive-review
+  mkdir -p "$home/data/$origin"
+  archive="$home/data/done-archive.md"
+
+  tasks_in "$home" add "$origin" "Investigate archived sample decisions" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create archived-decision origin"
+  write_origin_meta "$home" "$origin"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  printf '# Archive review\n\nOne captain choice was resolved and then archived.\n' \
+    > "$home/data/$origin/report.md"
+
+  hold=$(run_decisions "$home" hold "$origin" rotation \
+    --title "Choose the sample rotation" --reason "captain rotation choice pending" --repo sample) \
+    || fail "could not register the rotation hold"
+  run_decisions "$home" complete "$origin" rotation >/dev/null \
+    || fail "completion failed while the hold was still live"
+
+  tasks_in "$home" add sample-rotation-work "Apply the selected sample rotation" \
+    --kind ship --repo sample --blocked-by "$hold" >/dev/null \
+    || fail "could not create dependent rotation work"
+  printf 'Rotate the sample clockwise.\n' > "$home/rotation-decision.txt"
+  run_decisions "$home" resolve "$origin" rotation \
+    --decision-file "$home/rotation-decision.txt" --routed-to sample-rotation-work >/dev/null \
+    || fail "could not resolve the rotation decision"
+
+  # Force the exact retention rotation that hid the resolved decision, using the
+  # backlog's own archiving path rather than hand-moving the record.
+  tasks_in "$home" prune --keep 0 --state "done" >/dev/null \
+    || fail "could not archive the resolved decision through backlog retention"
+  if tasks_in "$home" show "$hold" --full >/dev/null 2>&1; then
+    fail "retention fixture did not remove the resolved decision from the active backlog"
+  fi
+  assert_grep "$hold" "$archive" "retention fixture did not archive the resolved decision"
+  assert_grep "Resolution recorded by fm-decision-hold." "$archive" \
+    "archived record lost its resolution body"
+
+  run_decisions "$home" complete "$origin" rotation >/dev/null 2> "$home/archived-complete.err" \
+    || fail "completion refused a decision durably resolved in the archive: $(cat "$home/archived-complete.err")"
+  run_decisions "$home" verify "$origin" >/dev/null 2> "$home/archived-verify.err" \
+    || fail "verification refused a decision durably resolved in the archive: $(cat "$home/archived-verify.err")"
+  run_teardown "$home" "$origin" >/dev/null 2> "$home/archived-teardown.err" \
+    || fail "teardown refused an investigation whose decisions are archived: $(cat "$home/archived-teardown.err")"
+
+  # An archived record must clear the same resolution bar an active record clears:
+  # mere presence of the identity in the archive is not durable resolution.
+  write_origin_meta "$home" "$origin"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  perl -0pi -e 's/^  Resolution recorded by fm-decision-hold\.\n//m' "$archive" \
+    || fail "could not strip the archived resolution marker"
+  assert_no_grep "Resolution recorded by fm-decision-hold." "$archive" \
+    "stripped fixture still carries the resolution marker"
+  if run_decisions "$home" verify "$origin" \
+    > "$home/stripped-verify.out" 2> "$home/stripped-verify.err"; then
+    fail "verification accepted an archived record with no resolution body"
+  fi
+  if run_decisions "$home" complete "$origin" rotation \
+    > "$home/stripped-complete.out" 2> "$home/stripped-complete.err"; then
+    fail "completion accepted an archived record with no resolution body"
+  fi
+
+  # An OPEN hold is a live-backlog fact. Finding one only in the archive must never
+  # satisfy the active-hold check that guards `resolve`.
+  keep_hold=$(run_decisions "$home" hold "$origin" retention \
+    --title "Choose the sample retention" --reason "captain retention choice pending" --repo sample) \
+    || fail "could not register the retention hold"
+  tasks_in "$home" prune --keep 0 --state queued >/dev/null \
+    || fail "could not archive the still-open retention hold"
+  if tasks_in "$home" show "$keep_hold" --full >/dev/null 2>&1; then
+    fail "queued-retention fixture did not remove the open hold from the active backlog"
+  fi
+  assert_grep "$keep_hold" "$archive" "queued-retention fixture did not archive the open hold"
+  tasks_in "$home" add sample-retention-work "Apply the selected sample retention" \
+    --kind ship --repo sample >/dev/null \
+    || fail "could not create dependent retention work"
+  printf 'Keep the sample for one cycle.\n' > "$home/retention-decision.txt"
+  if run_decisions "$home" resolve "$origin" retention \
+    --decision-file "$home/retention-decision.txt" --routed-to sample-retention-work \
+    > "$home/archived-open.out" 2> "$home/archived-open.err"; then
+    fail "resolve satisfied its active-hold check from the archive"
+  fi
+  assert_grep "absent from" "$home/archived-open.err" \
+    "an open hold found only in the archive must refuse as absent from the live backlog"
+  if run_decisions "$home" complete "$origin" retention \
+    > "$home/archived-open-complete.out" 2> "$home/archived-open-complete.err"; then
+    fail "completion accepted an open hold that exists only in the archive"
+  fi
+
+  pass "a resolved decision in the Done archive satisfies the gate while open and unresolved records still refuse"
+}
+
+# An absent or unset archive key must behave exactly as before the fallback existed:
+# refuse a genuinely missing decision, without crashing and without silently passing.
+test_absent_archive_config_behaves_as_before() {
+  local home origin
+  home=$(make_home no-archive-config)
+  origin=sample-no-archive-review
+  mkdir -p "$home/data/$origin"
+  cat > "$home/.tasks.toml" <<'EOF'
+backend = "markdown"
+
+[markdown]
+path = "data/backlog.md"
+done_keep = 10
+EOF
+  tasks_in "$home" add "$origin" "Investigate without an archive" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create no-archive origin"
+  write_origin_meta "$home" "$origin"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  printf '# No-archive review\n\nOne captain choice is claimed but absent.\n' \
+    > "$home/data/$origin/report.md"
+
+  if run_decisions "$home" complete "$origin" ghost \
+    > "$home/no-archive.out" 2> "$home/no-archive.err"; then
+    fail "completion passed a genuinely absent decision when no archive is configured"
+  fi
+  assert_grep "absent from" "$home/no-archive.err" \
+    "an absent archive key must refuse with the ordinary absence error"
+  assert_no_grep "decisions_reviewed=1" "$home/state/$origin.meta" \
+    "refused completion recorded a false attestation with no archive configured"
+
+  # A configured-but-missing archive file is a legitimate absence too.
+  cat > "$home/.tasks.toml" <<'EOF'
+backend = "markdown"
+
+[markdown]
+path = "data/backlog.md"
+archive = "data/done-archive.md"
+done_keep = 10
+EOF
+  assert_absent "$home/data/done-archive.md" "fixture must start with no archive file"
+  if run_decisions "$home" complete "$origin" ghost \
+    > "$home/missing-archive.out" 2> "$home/missing-archive.err"; then
+    fail "completion passed an absent decision when the archive file does not exist"
+  fi
+  assert_grep "absent from" "$home/missing-archive.err" \
+    "a missing archive file must refuse with the ordinary absence error"
+
+  # An empty archive unambiguously holds no records, so it is an absence too.
+  : > "$home/data/done-archive.md"
+  if run_decisions "$home" complete "$origin" ghost \
+    > "$home/empty-archive.out" 2> "$home/empty-archive.err"; then
+    fail "completion passed an absent decision when the archive file is empty"
+  fi
+  assert_grep "absent from" "$home/empty-archive.err" \
+    "an empty archive file must refuse with the ordinary absence error"
+
+  # A corrupt archive is not the same thing as an absence and must not read as one.
+  printf 'not a backlog\000at all\n' > "$home/data/done-archive.md"
+  if run_decisions "$home" complete "$origin" ghost \
+    > "$home/corrupt-archive.out" 2> "$home/corrupt-archive.err"; then
+    fail "completion passed while the configured archive was unreadable as a backlog"
+  fi
+  assert_grep "archive" "$home/corrupt-archive.err" \
+    "a corrupt archive must name the archive as the refusal reason"
+  assert_no_grep "decisions_reviewed=1" "$home/state/$origin.meta" \
+    "a corrupt archive recorded a false completion attestation"
+
+  pass "an absent, missing, or corrupt archive refuses exactly as before rather than passing"
+}
+
 test_uninventoried_report_decision_refuses_completion
 
 test_scout_teardown_always_requires_inventory_verification
@@ -560,3 +735,5 @@ test_none_inventory_and_resolved_prose_do_not_create_holds
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
+test_resolved_decision_in_done_archive_satisfies_the_gate
+test_absent_archive_config_behaves_as_before
