@@ -11,7 +11,8 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 
 The `hold` subcommand maps an originating work id and stable decision key to `<origin-id>-decision-<decision-key>`.
 It creates a kind `captain` backlog item when absent and invokes `tasks-axi hold <id> --reason <reason> --kind captain` on every retry.
-It rejects an identity collision, a changed title, and attempts to reopen an already resolved identity.
+It rejects an identity collision, a changed title, and an attempt to reopen an identity whose resolved record is still in the active backlog.
+That reopen guard reads only the active backlog, so a resolved key can still be re-held once retention has archived its record; the incident record below states that known related gap and its consequences.
 
 The `complete` subcommand unions the reviewed keys into `decision_keys=` and appends `decisions_reviewed=1` while originating task metadata is live.
 A post-teardown visual review can complete against the surviving report and durable holds without recreating volatile task metadata.
