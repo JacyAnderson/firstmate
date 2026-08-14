@@ -46,17 +46,26 @@
 # decision is therefore looked up in the active backlog first and in that archive
 # second, so a session that resolves more decisions than done_keep can still
 # complete, verify, and tear down its own investigations. The archive is consulted
-# whenever the live backlog does not itself settle the question - both when no live
-# record exists and when one exists but is neither an active captain hold nor a
-# durable resolution - so the answer never depends on where retention happens to
-# have left the records. Only a resolved record is accepted from the archive, and
-# it must carry the same resolution body an active record must carry. An ACTIVE
-# hold is never satisfiable from the archive: verify_hold_active reads the live
-# backlog alone.
+# when the live backlog holds no record for the identity at all, and when it holds
+# a SETTLED captain record - a closed one - that does not itself carry a durable
+# resolution, because retention may have left the resolution in the archive
+# instead. Retention position therefore never decides the answer for a settled
+# decision. A live record that is still open - queued, in flight, held again, or
+# otherwise unsettled - is an unanswered decision in its own right: it refuses, and
+# no archived resolution can settle it, so a decision that was answered, archived,
+# and then reopened gates completion again. Only a resolved record is accepted from
+# the archive, and it must carry the same resolution body an active record must
+# carry. An ACTIVE hold is never satisfiable from the archive: verify_hold_active
+# reads the live backlog alone.
 #
-# The archive path comes from `.tasks.toml`'s [markdown] archive key, resolved the
-# way tasks-axi resolves it, relative to FM_HOME. An absent config file or absent
-# archive key means there is no archive to consult. Because `tasks-axi show
+# The archive path comes only from `.tasks.toml`'s [markdown] archive key, resolved
+# relative to FM_HOME. When that key is absent this lookup is unavailable and the
+# gate refuses exactly as it did before the fallback existed. tasks-axi 0.2.5 still
+# archives to a default <backlog-dir>/done-archive.md when the key is unset, so a
+# home that does not pin the key can still reproduce the original defect; that is a
+# known and accepted limitation rather than a covered case. This repo's tracked
+# `.tasks.toml` pins the key and the regression suite copies it into every
+# synthetic home, so the shipped path is covered. Because `tasks-axi show
 # --file` refuses the configured archive path itself, and because `show` returns
 # only the first record carrying an id while retention can archive the same
 # identity more than once, the lookup stages one private throwaway single-record
@@ -352,12 +361,18 @@ verify_hold_durable() {  # <hold-id>
       return 0
     fi
     record_is_resolved "$show" && return 0
+    # An unsettled live record - queued, in flight, or held again - is an unanswered
+    # captain decision in its own right, whatever the archive remembers about an
+    # earlier answer. A decision that was resolved, archived, and then reopened must
+    # gate completion again, so this refuses without consulting the archive.
+    [ "$state" = "done" ] \
+      || fail "captain decision $id has an open unresolved record in $FM_HOME/data/backlog.md (state=$state held=$held kind=$kind)"
   fi
-  # The live record is absent, or exists but is neither an active captain hold nor a
-  # durable resolution. Either way retention may hold a resolved copy of this
-  # identity in the Done archive, so the archive is consulted before refusing:
-  # otherwise the gate's answer would depend on where retention happens to have left
-  # the records. Only a resolved record counts there, and it must carry the same
+  # The live record is absent, or is a settled record that carries no durable
+  # resolution. Either way retention may hold a resolved copy of this identity in the
+  # Done archive, so the archive is consulted before refusing: otherwise the gate's
+  # answer for a settled decision would depend on where retention happens to have
+  # left the records. Only a resolved record counts there, and it must carry the same
   # resolution body an active record must carry. Retention can archive one identity
   # repeatedly, so any archived record clearing that bar resolves the id regardless
   # of where it sits among the others.

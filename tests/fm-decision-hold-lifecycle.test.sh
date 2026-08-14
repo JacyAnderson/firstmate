@@ -657,12 +657,22 @@ test_resolved_decision_in_done_archive_satisfies_the_gate() {
     > "$home/archived-open.out" 2> "$home/archived-open.err"; then
     fail "resolve satisfied its active-hold check from the archive"
   fi
-  assert_grep "absent from" "$home/archived-open.err" \
+  assert_grep "captain hold $keep_hold is absent from" "$home/archived-open.err" \
     "an open hold found only in the archive must refuse as absent from the live backlog"
+  # The inventory is reset to the retention key alone so this refusal cannot be
+  # satisfied by the stripped rotation record examined above: which key refuses must
+  # not depend on the order the inventory happens to be sorted in.
+  write_origin_meta "$home" "$origin"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
   if run_decisions "$home" complete "$origin" retention \
     > "$home/archived-open-complete.out" 2> "$home/archived-open-complete.err"; then
     fail "completion accepted an open hold that exists only in the archive"
   fi
+  assert_grep "captain decision $keep_hold is absent from" \
+    "$home/archived-open-complete.err" \
+    "completion must refuse the open archived hold on its own absence from the live backlog"
+  assert_no_grep "$hold" "$home/archived-open-complete.err" \
+    "the open-hold refusal must name the retention key, not the rotation key"
 
   pass "a resolved decision in the Done archive satisfies the gate while open and unresolved records still refuse"
 }
@@ -847,6 +857,120 @@ test_stale_live_record_still_consults_the_archive() {
   pass "a stale unresolved live record does not hide a durable resolution in the archive"
 }
 
+# The archive fallback must not let an archived answer settle a decision that is
+# OPEN again in the live backlog. Retention rotates a resolved decision out, the same
+# key can then be re-held, and an unheld or in-flight copy of it is a genuinely
+# unanswered captain decision whatever the archive remembers. Before the fall-through
+# was narrowed to settled live records, both of those states passed completion, so
+# teardown could erase the source of a pending decision. Each state must refuse, and
+# a SETTLED live copy carrying no resolution must still be satisfiable from the
+# archive so the narrowing does not revert the fix this fallback exists to deliver.
+test_reopened_decision_is_not_settled_by_the_archive() {
+  local home origin hold work rc state show
+  for state in unheld in-flight; do
+    home=$(make_home "reopened-$state")
+    origin="sample-reopened-$state-review"
+    mkdir -p "$home/data/$origin"
+    tasks_in "$home" add "$origin" "Investigate a reopened sample decision" \
+      --kind scout --repo sample --start >/dev/null \
+      || fail "could not create reopened-decision origin ($state)"
+    write_origin_meta "$home" "$origin"
+    printf 'done: report complete\n' > "$home/state/$origin.status"
+    printf '# Reopened review\n\nOne captain choice was answered, archived, then reopened.\n' \
+      > "$home/data/$origin/report.md"
+
+    hold=$(run_decisions "$home" hold "$origin" pick \
+      --title "Choose the sample pick" --reason "captain pick choice pending" --repo sample) \
+      || fail "could not register the pick hold ($state)"
+    work=sample-pick-work
+    tasks_in "$home" add "$work" "Apply the selected sample pick" \
+      --kind ship --repo sample --blocked-by "$hold" >/dev/null \
+      || fail "could not create dependent pick work ($state)"
+    printf 'Pick the sample front.\n' > "$home/pick-decision.txt"
+    run_decisions "$home" resolve "$origin" pick \
+      --decision-file "$home/pick-decision.txt" --routed-to "$work" >/dev/null \
+      || fail "could not resolve the pick decision ($state)"
+    tasks_in "$home" prune --keep 0 --state "done" >/dev/null \
+      || fail "could not archive the resolved pick copy ($state)"
+    assert_grep "Resolution recorded by fm-decision-hold." "$home/data/done-archive.md" \
+      "reopened fixture must leave the resolved copy in the archive ($state)"
+
+    # Reopening the key is possible once its resolution has left the live backlog.
+    # Each reopened shape is a live record that is NOT settled.
+    run_decisions "$home" hold "$origin" pick \
+      --title "Choose the sample pick" --reason "captain pick choice pending" --repo sample \
+      >/dev/null || fail "could not re-hold the pick key after its resolution was archived ($state)"
+    if [ "$state" = unheld ]; then
+      tasks_in "$home" unhold "$hold" >/dev/null \
+        || fail "could not drop the hold from the reopened pick record"
+    else
+      tasks_in "$home" start "$hold" >/dev/null \
+        || fail "could not start the reopened pick record"
+    fi
+    show=$(tasks_in "$home" show "$hold" --full) \
+      || fail "reopened fixture must leave a live copy in the backlog ($state)"
+    assert_not_contains "$show" "Resolution recorded by fm-decision-hold." \
+      "reopened live copy must carry no resolution body ($state)"
+    if [ "$state" = unheld ]; then
+      assert_contains "$show" "state: queued" "unheld fixture must leave a queued record"
+      assert_contains "$show" "held: no" "unheld fixture must leave an unheld record"
+    else
+      assert_contains "$show" "state: in_flight" "in-flight fixture must leave an in_flight record"
+    fi
+
+    if run_decisions "$home" complete "$origin" pick \
+      > "$home/reopened-complete.out" 2> "$home/reopened-complete.err"; then
+      fail "completion accepted a reopened pending decision from the archive ($state)"
+    fi
+    assert_grep "captain decision $hold has an open unresolved record" \
+      "$home/reopened-complete.err" \
+      "completion must refuse a reopened decision on its own open live record ($state)"
+    assert_no_grep "decisions_reviewed=1" "$home/state/$origin.meta" \
+      "refused completion recorded a false attestation for a reopened decision ($state)"
+
+    printf 'decisions_reviewed=1\ndecision_keys=pick\n' >> "$home/state/$origin.meta"
+    if run_decisions "$home" verify "$origin" \
+      > "$home/reopened-verify.out" 2> "$home/reopened-verify.err"; then
+      fail "verification accepted a reopened pending decision from the archive ($state)"
+    fi
+    assert_grep "captain decision $hold has an open unresolved record" \
+      "$home/reopened-verify.err" \
+      "verification must refuse a reopened decision on its own open live record ($state)"
+    if run_teardown "$home" "$origin" \
+      > "$home/reopened-teardown.out" 2> "$home/reopened-teardown.err"; then
+      fail "teardown erased the source of a reopened pending decision ($state)"
+    fi
+    assert_present "$home/state/$origin.meta" \
+      "refused teardown removed the metadata of a reopened pending decision ($state)"
+
+    # Settling the reopened copy - closed, still with no resolution body - restores
+    # the stale-record case the fallback exists for, so the archive must answer again.
+    tasks_in "$home" "done" "$hold" >/dev/null \
+      || fail "could not settle the reopened pick record ($state)"
+    show=$(tasks_in "$home" show "$hold" --full) \
+      || fail "settled fixture must leave the live copy in the backlog ($state)"
+    assert_contains "$show" "state: done" "settled fixture must leave a done record"
+    assert_not_contains "$show" "Resolution recorded by fm-decision-hold." \
+      "settled live copy must still carry no resolution body ($state)"
+    set +e
+    run_decisions "$home" complete "$origin" pick \
+      > "$home/settled-complete.out" 2> "$home/settled-complete.err"
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] \
+      || fail "narrowing broke the settled stale-record fall-through ($state): $(cat "$home/settled-complete.err")"
+    set +e
+    run_decisions "$home" verify "$origin" \
+      > "$home/settled-verify.out" 2> "$home/settled-verify.err"
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] \
+      || fail "narrowing broke the settled stale-record verification ($state): $(cat "$home/settled-verify.err")"
+  done
+
+  pass "a decision reopened after its answer was archived gates completion again"
+}
+
 # An absent or unset archive key must behave exactly as before the fallback existed:
 # refuse a genuinely missing decision, without crashing and without silently passing.
 test_absent_archive_config_behaves_as_before() {
@@ -936,4 +1060,5 @@ test_resolve_matches_quoted_blocked_by_edges
 test_resolved_decision_in_done_archive_satisfies_the_gate
 test_duplicate_archived_identity_is_order_independent
 test_stale_live_record_still_consults_the_archive
+test_reopened_decision_is_not_settled_by_the_archive
 test_absent_archive_config_behaves_as_before
