@@ -857,17 +857,24 @@ test_stale_live_record_still_consults_the_archive() {
   pass "a stale unresolved live record does not hide a durable resolution in the archive"
 }
 
-# The archive fallback must not let an archived answer settle a decision that is
-# OPEN again in the live backlog. Retention rotates a resolved decision out, the same
-# key can then be re-held, and an unheld or in-flight copy of it is a genuinely
-# unanswered captain decision whatever the archive remembers. Before the fall-through
-# was narrowed to settled live records, both of those states passed completion, so
-# teardown could erase the source of a pending decision. Each state must refuse, and
-# a SETTLED live copy carrying no resolution must still be satisfiable from the
+# The archive fallback must not let an archived answer settle a live record that is
+# OPEN and is not an active captain hold. Retention rotates a resolved decision out,
+# the same key can then be re-held, and dropping that copy out of its captain hold -
+# unheld, in flight, or held for something else - leaves a genuinely unanswered
+# captain decision whatever the archive remembers. Before the fall-through was
+# narrowed to settled live records, every one of those states passed completion, so
+# teardown could erase the source of a pending decision. Each must refuse, naming all
+# four fields the active-hold check tests so the refusal explains which one failed,
+# and a SETTLED live copy carrying no resolution must still be satisfiable from the
 # archive so the narrowing does not revert the fix this fallback exists to deliver.
+#
+# Re-holding through the script's own `hold` alone is deliberately NOT one of these
+# states: it presents as an active captain hold, which is a legitimate durable state
+# satisfied by the active-hold check before this one, so it passes here exactly as it
+# does on base. That base parity is asserted at the end rather than left implicit.
 test_reopened_decision_is_not_settled_by_the_archive() {
-  local home origin hold work rc state show
-  for state in unheld in-flight; do
+  local home origin hold work rc state show expected
+  for state in unheld in-flight external-hold; do
     home=$(make_home "reopened-$state")
     origin="sample-reopened-$state-review"
     mkdir -p "$home/data/$origin"
@@ -900,23 +907,46 @@ test_reopened_decision_is_not_settled_by_the_archive() {
     run_decisions "$home" hold "$origin" pick \
       --title "Choose the sample pick" --reason "captain pick choice pending" --repo sample \
       >/dev/null || fail "could not re-hold the pick key after its resolution was archived ($state)"
-    if [ "$state" = unheld ]; then
-      tasks_in "$home" unhold "$hold" >/dev/null \
-        || fail "could not drop the hold from the reopened pick record"
-    else
-      tasks_in "$home" start "$hold" >/dev/null \
-        || fail "could not start the reopened pick record"
-    fi
+    case "$state" in
+      unheld)
+        tasks_in "$home" unhold "$hold" >/dev/null \
+          || fail "could not drop the hold from the reopened pick record"
+        ;;
+      in-flight)
+        tasks_in "$home" start "$hold" >/dev/null \
+          || fail "could not start the reopened pick record"
+        ;;
+      external-hold)
+        tasks_in "$home" hold "$hold" --reason "external pick review pending" --kind external \
+          >/dev/null || fail "could not re-hold the reopened pick record for a non-captain owner"
+        ;;
+    esac
     show=$(tasks_in "$home" show "$hold" --full) \
       || fail "reopened fixture must leave a live copy in the backlog ($state)"
     assert_not_contains "$show" "Resolution recorded by fm-decision-hold." \
       "reopened live copy must carry no resolution body ($state)"
-    if [ "$state" = unheld ]; then
-      assert_contains "$show" "state: queued" "unheld fixture must leave a queued record"
-      assert_contains "$show" "held: no" "unheld fixture must leave an unheld record"
-    else
-      assert_contains "$show" "state: in_flight" "in-flight fixture must leave an in_flight record"
-    fi
+    # Each shape must fail exactly one of the four active-hold fields, and the refusal
+    # must name the failing value: otherwise a message listing only satisfying-looking
+    # fields cannot explain its own refusal.
+    case "$state" in
+      unheld)
+        assert_contains "$show" "state: queued" "unheld fixture must leave a queued record"
+        assert_contains "$show" "held: no" "unheld fixture must leave an unheld record"
+        expected="state=queued held=no kind=captain"
+        ;;
+      in-flight)
+        assert_contains "$show" "state: in_flight" "in-flight fixture must leave an in_flight record"
+        assert_contains "$show" "held: yes" "in-flight fixture must keep its captain hold"
+        expected="state=in_flight held=yes kind=captain hold_kind=captain"
+        ;;
+      external-hold)
+        assert_contains "$show" "state: queued" "external-hold fixture must leave a queued record"
+        assert_contains "$show" "held: yes" "external-hold fixture must leave a held record"
+        assert_contains "$show" "hold_kind: external" \
+          "external-hold fixture must leave a non-captain hold_kind"
+        expected="state=queued held=yes kind=captain hold_kind=external"
+        ;;
+    esac
 
     if run_decisions "$home" complete "$origin" pick \
       > "$home/reopened-complete.out" 2> "$home/reopened-complete.err"; then
@@ -925,6 +955,8 @@ test_reopened_decision_is_not_settled_by_the_archive() {
     assert_grep "captain decision $hold has an open unresolved record" \
       "$home/reopened-complete.err" \
       "completion must refuse a reopened decision on its own open live record ($state)"
+    assert_grep "($expected" "$home/reopened-complete.err" \
+      "the refusal must report the live fields actually observed ($state)"
     assert_no_grep "decisions_reviewed=1" "$home/state/$origin.meta" \
       "refused completion recorded a false attestation for a reopened decision ($state)"
 
@@ -968,7 +1000,60 @@ test_reopened_decision_is_not_settled_by_the_archive() {
       || fail "narrowing broke the settled stale-record verification ($state): $(cat "$home/settled-verify.err")"
   done
 
-  pass "a decision reopened after its answer was archived gates completion again"
+  # Re-holding an archived key through the script's own `hold`, with nothing after it,
+  # leaves an ACTIVE captain hold. That is a legitimate durable state the active-hold
+  # check satisfies before the settled check is reached, so it must keep passing: the
+  # narrowing above governs records that are open WITHOUT such a hold, not this one.
+  home=$(make_home reheld-active-hold)
+  origin=sample-reheld-review
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate a re-held sample decision" \
+    --kind scout --repo sample --start >/dev/null \
+    || fail "could not create re-held-decision origin"
+  write_origin_meta "$home" "$origin"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  printf '# Re-held review\n\nOne captain choice was answered, archived, then re-held.\n' \
+    > "$home/data/$origin/report.md"
+
+  hold=$(run_decisions "$home" hold "$origin" pick \
+    --title "Choose the sample pick" --reason "captain pick choice pending" --repo sample) \
+    || fail "could not register the re-held pick hold"
+  work=sample-pick-work
+  tasks_in "$home" add "$work" "Apply the selected sample pick" \
+    --kind ship --repo sample --blocked-by "$hold" >/dev/null \
+    || fail "could not create dependent re-held pick work"
+  printf 'Pick the sample front.\n' > "$home/pick-decision.txt"
+  run_decisions "$home" resolve "$origin" pick \
+    --decision-file "$home/pick-decision.txt" --routed-to "$work" >/dev/null \
+    || fail "could not resolve the re-held pick decision"
+  tasks_in "$home" prune --keep 0 --state "done" >/dev/null \
+    || fail "could not archive the resolved re-held pick copy"
+  run_decisions "$home" hold "$origin" pick \
+    --title "Choose the sample pick" --reason "captain pick choice pending" --repo sample \
+    >/dev/null || fail "could not re-hold the pick key after its resolution was archived"
+
+  show=$(tasks_in "$home" show "$hold" --full) \
+    || fail "re-held fixture must leave a live copy in the backlog"
+  assert_contains "$show" "state: queued" "re-held fixture must leave a queued record"
+  assert_contains "$show" "held: yes" "re-held fixture must leave an active hold"
+  assert_contains "$show" "kind: captain" "re-held fixture must leave a captain record"
+  assert_contains "$show" "hold_kind: captain" "re-held fixture must leave a captain hold"
+  set +e
+  run_decisions "$home" complete "$origin" pick \
+    > "$home/reheld-complete.out" 2> "$home/reheld-complete.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || fail "an active captain hold stopped satisfying completion: $(cat "$home/reheld-complete.err")"
+  set +e
+  run_decisions "$home" verify "$origin" \
+    > "$home/reheld-verify.out" 2> "$home/reheld-verify.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || fail "an active captain hold stopped satisfying verification: $(cat "$home/reheld-verify.err")"
+
+  pass "an open live record without an active captain hold is not settled by the archive"
 }
 
 # An absent or unset archive key must behave exactly as before the fallback existed:

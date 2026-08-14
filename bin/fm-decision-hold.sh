@@ -50,13 +50,24 @@
 # a SETTLED captain record - a closed one - that does not itself carry a durable
 # resolution, because retention may have left the resolution in the archive
 # instead. Retention position therefore never decides the answer for a settled
-# decision. A live record that is still open - queued, in flight, held again, or
-# otherwise unsettled - is an unanswered decision in its own right: it refuses, and
-# no archived resolution can settle it, so a decision that was answered, archived,
-# and then reopened gates completion again. Only a resolved record is accepted from
-# the archive, and it must carry the same resolution body an active record must
-# carry. An ACTIVE hold is never satisfiable from the archive: verify_hold_active
-# reads the live backlog alone.
+# decision. A live record that is open but is NOT an active captain hold - it is in
+# flight, or unheld, or held for something other than the captain - is an unanswered
+# decision in its own right: it refuses on its own observed state, and no archived
+# resolution can settle it. Only a resolved record is accepted from the archive, and
+# it must carry the same resolution body an active record must carry. An ACTIVE hold
+# is never satisfiable from the archive: verify_hold_active reads the live backlog
+# alone.
+#
+# Re-holding an archived decision key through this script's own `hold` is a separate
+# path with a separate answer, and the gate is not what stops it. Such a record
+# presents as an active captain hold (state=queued held=yes kind=captain
+# hold_kind=captain), which the active-hold branch accepts before the settled check
+# is ever reached, so completion, verification, and teardown all succeed. That is
+# base-parity behavior, verified identical on base 4bf9c08, and it is not a gap in
+# protection: an active captain hold IS a legitimate durable state, and such a
+# decision is gated by that live hold rather than by this check. What lets the key be
+# re-held at all is command_hold's live-only resolved-key guard, a known related gap
+# whose semantics the decision-hold-lifecycle skill owns.
 #
 # The archive path comes only from `.tasks.toml`'s [markdown] archive key, resolved
 # relative to FM_HOME. When that key is absent this lookup is unavailable and the
@@ -361,12 +372,13 @@ verify_hold_durable() {  # <hold-id>
       return 0
     fi
     record_is_resolved "$show" && return 0
-    # An unsettled live record - queued, in flight, or held again - is an unanswered
-    # captain decision in its own right, whatever the archive remembers about an
-    # earlier answer. A decision that was resolved, archived, and then reopened must
-    # gate completion again, so this refuses without consulting the archive.
+    # An open live record that reached here is not an active captain hold and carries
+    # no resolution, so it is an unanswered captain decision in its own right whatever
+    # the archive remembers about an earlier answer. It refuses without consulting the
+    # archive, naming every field the active-hold branch above tests so the refusal can
+    # explain which one failed.
     [ "$state" = "done" ] \
-      || fail "captain decision $id has an open unresolved record in $FM_HOME/data/backlog.md (state=$state held=$held kind=$kind)"
+      || fail "captain decision $id has an open unresolved record in $FM_HOME/data/backlog.md (state=$state held=$held kind=$kind hold_kind=$hold_kind)"
   fi
   # The live record is absent, or is a settled record that carries no durable
   # resolution. Either way retention may hold a resolved copy of this identity in the

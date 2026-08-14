@@ -99,11 +99,16 @@ Without the second case, a stale closed live copy of an identity whose resolutio
 Retention position must not decide the answer for a settled decision.
 
 The fall-through stops at settled records.
-A live record that is still open - queued, in flight, or held again - is an unanswered captain decision in its own right, so it refuses on its own state and no archived resolution can satisfy it.
-That keeps a decision that was answered, archived, and then reopened gating completion, verification, and teardown exactly as it did before the archive fallback existed.
+A live record that is open but is not an active captain hold - in flight, unheld, or held for something other than the captain - is an unanswered captain decision in its own right, so it refuses on its own observed state and no archived resolution can satisfy it.
+The refusal names all four fields the active-hold check tests, `state`, `held`, `kind`, and `hold_kind`, so it can say which one failed.
 
-Observed 2026-08-14 in a synthetic home: before the fall-through was narrowed to settled records, a reopened decision stopped gating completion.
-The reproduction resolves a decision, lets the backlog's own retention archive it, re-holds the same key, and then leaves that live copy unsettled.
+Re-holding an archived decision key through this script's own `hold` is a different path with a different answer, and this check is not what governs it.
+That record presents as an active captain hold - `state=queued held=yes kind=captain hold_kind=captain` - which the active-hold branch accepts before the settled check is reached, so completion, verification, and teardown all succeed.
+That is base-parity behavior, verified identical on base `4bf9c08`, and not a gap in protection: an active captain hold is a legitimate durable state, and such a decision is gated by that live hold rather than by this check.
+What lets the key be re-held at all is `command_hold`'s live-only resolved-key guard, recorded below as a known related gap.
+
+Observed 2026-08-14 in a synthetic home: before the fall-through was narrowed to settled records, an archived answer settled a live record that was open and not an active captain hold.
+The reproduction resolves a decision, lets the backlog's own retention archive it, re-holds the same key, and then drops that live copy out of an active captain hold.
 
 ```text
 $ bin/fm-decision-hold.sh hold sample-reopened-review pick --title "Choose the sample pick" --reason "captain pick choice pending" --repo sample
@@ -115,6 +120,7 @@ $ tasks-axi unhold sample-reopened-review-decision-pick
 $ tasks-axi show sample-reopened-review-decision-pick --full
   state: queued
   held: no
+  hold_kind: "-"
   kind: captain
   body: "Origin: sample-reopened-review\nDecision key: pick\nState: awaiting captain decision."
 
@@ -123,29 +129,31 @@ complete: sample-reopened-review decision inventory reviewed (pick)
                                                                         # rc=0
 
 $ bin/fm-decision-hold.sh complete sample-reopened-review pick    # after narrowing
-fm-decision-hold: captain decision sample-reopened-review-decision-pick has an open unresolved record in .../data/backlog.md (state=queued held=no kind=captain)
+fm-decision-hold: captain decision sample-reopened-review-decision-pick has an open unresolved record in .../data/backlog.md (state=queued held=no kind=captain hold_kind="-")
                                                                         # rc=1
 ```
 
-`tasks-axi start` in place of `unhold` reproduces it identically through a different live shape.
+`tasks-axi start` in place of `unhold` reproduces it through a distinct live shape, one that keeps its captain hold but leaves `state=in_flight`.
 
 ```text
 $ tasks-axi start sample-reopened-review-decision-pick
 $ tasks-axi show sample-reopened-review-decision-pick --full
   state: in_flight
   held: yes
+  hold_kind: captain
+  kind: captain
 
 $ bin/fm-decision-hold.sh complete sample-reopened-review pick    # before narrowing
 complete: sample-reopened-review decision inventory reviewed (pick)
                                                                         # rc=0
 
 $ bin/fm-decision-hold.sh complete sample-reopened-review pick    # after narrowing
-fm-decision-hold: captain decision sample-reopened-review-decision-pick has an open unresolved record in .../data/backlog.md (state=in_flight held=yes kind=captain)
+fm-decision-hold: captain decision sample-reopened-review-decision-pick has an open unresolved record in .../data/backlog.md (state=in_flight held=yes kind=captain hold_kind=captain)
                                                                         # rc=1
 ```
 
-Both refusals match what base `4bf9c08` did before any archive lookup existed, so teardown can no longer erase the source of a genuinely pending decision.
-Settling that same reopened copy without a resolution restores the stale-record case, and the archive answers it again, so the narrowing does not revert the fix.
+Both refusals match what base `4bf9c08` did before any archive lookup existed, so teardown can no longer erase the source of one of these decisions.
+Settling either copy without a resolution restores the stale-record case, and the archive answers it again, so the narrowing does not revert the fix.
 
 ```text
 $ tasks-axi done sample-reopened-review-decision-pick
@@ -156,6 +164,48 @@ $ tasks-axi show sample-reopened-review-decision-pick --full
 $ bin/fm-decision-hold.sh complete sample-reopened-review pick    # after narrowing
 complete: sample-reopened-review decision inventory reviewed (pick)
                                                                         # rc=0
+```
+
+Re-holding the same archived key through `bin/fm-decision-hold.sh hold` alone, with no `unhold` or `start` after it, is the base-parity case above rather than a refusal.
+Verified 2026-08-14 against both this revision and base `4bf9c08` in the same home: the record is an active captain hold, and both revisions pass it.
+
+```text
+$ bin/fm-decision-hold.sh hold sample-reheld-review pick --title "Pick" --reason "captain pick pending" --repo sample
+sample-reheld-review-decision-pick
+
+$ tasks-axi show sample-reheld-review-decision-pick --full
+  state: queued
+  held: yes
+  hold_kind: captain
+  kind: captain
+
+$ bin/fm-decision-hold.sh complete sample-reheld-review pick    # this revision
+complete: sample-reheld-review decision inventory reviewed (pick)
+                                                                        # rc=0
+
+$ bin/fm-decision-hold.sh verify sample-reheld-review              # this revision
+verified: sample-reheld-review unresolved-decision inventory
+                                                                        # rc=0
+
+$ bin/fm-decision-hold.sh complete sample-reheld-review pick    # base 4bf9c08
+complete: sample-reheld-review decision inventory reviewed (pick)
+                                                                        # rc=0
+```
+
+The refusal names `hold_kind` because that field alone can be what failed.
+Verified 2026-08-14: a record held for something other than the captain satisfies `state`, `held`, and `kind`, so without `hold_kind` the message printed only fields that look like a valid active captain hold and could not explain its own refusal.
+
+```text
+$ tasks-axi hold sample-hk-review-decision-pick --reason "external pending" --kind external
+$ tasks-axi show sample-hk-review-decision-pick --full
+  state: queued
+  held: yes
+  hold_kind: external
+  kind: captain
+
+$ bin/fm-decision-hold.sh complete sample-hk-review pick
+fm-decision-hold: captain decision sample-hk-review-decision-pick has an open unresolved record in .../data/backlog.md (state=queued held=yes kind=captain hold_kind=external)
+                                                                        # rc=1
 ```
 
 An accepted limitation, verified 2026-08-14 on tasks-axi 0.2.5: the lookup reads only the archive path pinned under `[markdown] archive`, while tasks-axi archives to a default `<backlog-dir>/done-archive.md` even when that key - or the whole `.tasks.toml` - is absent.
@@ -209,12 +259,14 @@ The focused end-to-end regression uses only synthetic `sample` identities and de
 It begins with a completed investigation and visual review whose genuine unresolved choice exists only in the report.
 The initial Bearings snapshot correctly has no open decision, and the new teardown gate refuses to erase the source.
 A later regression covers tasks-axi's quoted multi-entry `blocked_by` output so `resolve` matches the first, middle, and last ids and rejects a genuinely absent id.
-Five Done-archive regressions drive the incident above through the backlog's own `tasks-axi prune` retention rather than hand-moving records, and together assert seven boundaries.
+Five Done-archive regressions drive the incident above through the backlog's own `tasks-axi prune` retention rather than hand-moving records, and together assert eight boundaries.
 `test_resolved_decision_in_done_archive_satisfies_the_gate` covers three: a resolved archived decision passes, an archived record stripped of its resolution markers still refuses with the archive-specific refusal, and an open hold present only in the archive satisfies neither the active-hold check nor completion.
 Each of those three refusals is pinned to the identity under test, and the open-hold case resets the inventory to that key alone so which key refuses cannot depend on inventory sort order.
 `test_duplicate_archived_identity_is_order_independent` covers the ordering boundary, building both archive orderings of one duplicated identity through the real hold, resolve, and prune lifecycle and requiring the same answer from each.
 `test_stale_live_record_still_consults_the_archive` covers the stale-live-record boundary, pairing an archived resolution with a closed unresolved live copy of the same identity and requiring that the answer not change when retention later rotates that live copy out.
-`test_reopened_decision_is_not_settled_by_the_archive` covers the reopened boundary in both live shapes, `unhold` and `start`: completion, verification, and teardown each refuse on the live record's own open state, no false attestation is written, and settling that same copy without a resolution then passes from the archive so the narrowing is proved not to revert the stale-record fix.
+`test_reopened_decision_is_not_settled_by_the_archive` covers two: the open-without-an-active-captain-hold boundary in all three live shapes that reach it, `unhold`, `start`, and a non-captain `hold`, and the base-parity boundary for the one shape that does not.
+In each of the three, completion, verification, and teardown refuse on the live record's own open state, the refusal is required to quote the fields actually observed so it can explain which one failed, no false attestation is written, and settling that same copy without a resolution then passes from the archive so the narrowing is proved not to revert the stale-record fix.
+The base-parity case re-holds an archived key through this script's own `hold` and nothing further, leaving an active captain hold, and requires completion and verification to keep succeeding, pinning the behavior recorded above as unchanged from base rather than leaving it implicit.
 `test_absent_archive_config_behaves_as_before` covers the last: an absent, missing, empty, or corrupt archive refuses exactly as before instead of passing, with the corrupt case asserted on its own `is not a text backlog file` refusal so it cannot be satisfied by an ordinary absence.
 
 The final verification commands and their exact summarized outputs follow.
@@ -233,7 +285,7 @@ ok - resolve matches first/middle/last in quoted blocked_by and rejects a genuin
 ok - a resolved decision in the Done archive satisfies the gate while open and unresolved records still refuse
 ok - a duplicated archived identity resolves the same way in either ordering
 ok - a stale unresolved live record does not hide a durable resolution in the archive
-ok - a decision reopened after its answer was archived gates completion again
+ok - an open live record without an active captain hold is not settled by the archive
 ok - an absent, missing, or corrupt archive refuses exactly as before rather than passing
 
 $ bash tests/fm-fleet-snapshot-view.test.sh
@@ -265,6 +317,10 @@ not ok - Orca spawn should fail when metadata cannot be written
 $ bash tests/fm-backend.test.sh         # fails identically on the unmodified base
 not ok - fm-send --key: old vs new exit code: expected exit 1, got 0
 
-$ for test_script in tests/*.test.sh; do bash "$test_script"; done
-ALL 71 TEST SCRIPTS PASSED
+$ ls tests/*.test.sh | wc -l
+      95
 ```
+
+No all-suites aggregate is claimed here.
+Re-counted 2026-08-14: the repository holds 95 test scripts, not the 71 an earlier revision of this record asserted, and two of them - the backend scripts quoted above - fail on unmodified base code.
+An "all scripts passed" line therefore cannot be true as written, so it is dropped rather than restated; the whole-repository run is owned by the dedicated test step, and this record keeps only the suites it verified directly.
