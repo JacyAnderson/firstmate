@@ -26,6 +26,7 @@ Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, whil
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
+Keep the `[markdown] archive` key pinned: `bin/fm-decision-hold.sh` reads it to find decisions that retention has rotated out of the active backlog, and an unpinned key makes that gate refuse its own resolved decisions ([decision-hold-lifecycle.md](decision-hold-lifecycle.md)).
 When the default backend is selected and compatible `tasks-axi` is on `PATH`, firstmate uses its verbs for routine backlog mutations.
 Secondmate handoffs are separate and unconditional: `fm-backlog-handoff.sh` keeps only its own fleet-level validation and always delegates the item move to `tasks-axi mv`, the single owner of the backlog format.
 It moves in-scope `## Queued` items only and refuses `## In flight` and historical `## Done` records, which stay with their home for pruning or archiving.
