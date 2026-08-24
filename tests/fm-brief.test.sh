@@ -321,6 +321,30 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
+# Ship and scout scaffolds carry the standing outward-language rule so workers
+# never leak agent-workflow vocabulary into PRs, commits, comments, or issues.
+test_ship_and_scout_carry_outward_language_rule() {
+  local home kind id brief
+  home="$TMP_ROOT/outward-language-home"
+  mkdir -p "$home/data"
+  for kind in ship scout; do
+    id="brief-outward-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_grep "must be plain engineering prose written for the target repo's human" "$brief" \
+      "$kind brief lost the outward-language plain-prose requirement"
+    assert_grep "never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate," "$brief" \
+      "$kind brief lost the banned agent-workflow vocabulary list"
+    assert_grep "Self-check outward text against this rule before publishing" "$brief" \
+      "$kind brief lost the pre-publish self-check instruction"
+  done
+  pass "fm-brief.sh: ship and scout scaffolds carry the outward-language rule"
+}
+
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -354,4 +378,5 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
+test_ship_and_scout_carry_outward_language_rule
 test_scout_and_secondmate_scaffold
