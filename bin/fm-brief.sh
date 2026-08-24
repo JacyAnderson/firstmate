@@ -259,6 +259,12 @@ The report is the only thing that survives, so anything worth keeping must be in
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. All outward-facing text you author (PR titles and descriptions, commit messages, code comments,
+   review comments, issue text) must be plain engineering prose written for the target repo's human
+   audience - never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate,
+   "brief"/"task brief" as workflow terms, narration about your own worktree or pipeline, nautical
+   phrasing). Self-check outward text against this rule before publishing it (opening a PR,
+   pushing a commit, posting a comment).
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -369,6 +375,12 @@ $RULE1
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. All outward-facing text you author (PR titles and descriptions, commit messages, code comments,
+   review comments, issue text) must be plain engineering prose written for the target repo's human
+   audience - never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate,
+   "brief"/"task brief" as workflow terms, narration about your own worktree or pipeline, nautical
+   phrasing). Self-check outward text against this rule before publishing it (opening a PR,
+   pushing a commit, posting a comment).
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
