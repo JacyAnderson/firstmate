@@ -78,6 +78,10 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-peek.sh`             | Print a bounded tail of a crewmate endpoint                                          |
 | `fm-check-register.sh`   | Bind an intentional custom watcher check to its current bytes                       |
 | `fm-check-lib.sh`        | Validate custom-check registrations and prepare private execution snapshots          |
+| `fm-mission-control.sh`  | Start, stop, and report the Mission Control board server and install its watcher inbox check |
+| `fm-mission-control-server.mjs` | Localhost-only board server rendering initiative cards and queueing captain input as inbox files (docs/mission-control.md) |
+| `fm-mission-control-poll.sh` | List-names-only inbox poll naming the initiatives with pending captain input     |
+| `fm-mission-control-seed.sh` | Seed absent initiative stubs and registry entries from the open tasks-axi backlog |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll and provenance publication |
 | `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated PR/MR-poll sidecars           |
 | `fm-pr-check-migrate.sh` | Quarantine older task polls without execution and rebuild only canonical polls       |
