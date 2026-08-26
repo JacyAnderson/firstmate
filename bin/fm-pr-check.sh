@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Record a PR-ready task: store one validated canonical pr=<url> and the forge's
-# exact pr_head=<sha> when available, then atomically arm a static merge poll.
+# exact pr_head=<sha> when available, then atomically arm a static merge and
+# review-comment poll (bin/fm-pr-poll.sh documents both wake lines).
 # The watcher check source is byte-for-byte bin/fm-pr-poll.sh; task and PR data
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
 # including a merge request on a self-hosted GitLab instance.
+# Arming removes any state/<id>.pr-comments watermark left by an earlier arm,
+# so the first poll of the new PR re-initializes it silently. A live task armed
+# before comment detection existed is upgraded by re-running this one line.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -106,6 +110,14 @@ fm_pr_metadata_identity_parse "$META" || exit 1
 [ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \
   && [ "$FM_PR_META_HOST" = "$HOST" ] && [ "$FM_PR_META_PATH" = "$PROJECT_PATH" ] \
   && [ "$FM_PR_META_NUMBER" = "$NUMBER" ] || exit 1
+
+# Drop any watermark left by an earlier arm of this task id before the poll
+# goes live, so a re-arm (including the upgrade re-arm of a pre-comment-watch
+# task) starts from a silent re-initialization instead of a stale record.
+COMMENTS="$STATE/$ID.pr-comments"
+if [ ! -d "$COMMENTS" ]; then
+  rm -f -- "$COMMENTS" 2>/dev/null || true
+fi
 
 fm_pr_poll_publish_prepared || {
   echo "error: could not publish PR poll" >&2
