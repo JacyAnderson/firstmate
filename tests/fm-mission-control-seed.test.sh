@@ -77,4 +77,31 @@ fi
 assert_contains "$out" "manual" "manual-backend refusal names the reason"
 pass "manual backlog backend is refused"
 
+# --- listing failure propagates ------------------------------------------------
+
+# A fake tasks-axi that passes the compatibility probe but fails on list: the
+# seed must stop with the error, not report a zero-card success.
+FAIL_HOME=$(fm_test_tmproot fm-mc-seed-fail)
+mkdir -p "$FAIL_HOME"
+fakebin=$(fm_fakebin "$FAIL_HOME")
+cat > "$fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version|-v|-V) echo "tasks-axi 0.9.9"; exit 0 ;;
+  update) echo "usage: tasks-axi update ... --archive-body"; exit 0 ;;
+  mv) echo "usage: tasks-axi mv [<id>...]"; exit 0 ;;
+  list) echo "error: backlog corrupted" >&2; exit 1 ;;
+esac
+exit 0
+SH
+chmod +x "$fakebin/tasks-axi"
+rc=0
+out=$(FM_HOME="$FAIL_HOME" PATH="$fakebin:$PATH" "$SEED" 2>&1) || rc=$?
+expect_code 1 "$rc" "seed with a failing tasks-axi list"
+assert_contains "$out" "tasks-axi list failed" "listing failure is reported"
+assert_contains "$out" "backlog corrupted" "listing failure carries the tool's error"
+assert_not_contains "$out" "seed:" "no zero-card success summary after a listing failure"
+assert_absent "$FAIL_HOME/data/mission-control" "no cards or registry written after a listing failure"
+pass "a tasks-axi list failure stops the seed with its error"
+
 echo "ok - fm-mission-control-seed"

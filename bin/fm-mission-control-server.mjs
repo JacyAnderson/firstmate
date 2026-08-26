@@ -57,7 +57,10 @@ function parseInitiative(slug, raw) {
     const end = raw.indexOf('\n---', 4);
     if (end !== -1) {
       const front = raw.slice(4, end);
-      body = raw.slice(raw.indexOf('\n', end + 1) + 1);
+      // The closing --- may be the last line of the file with no trailing
+      // newline; the card body is then empty rather than the raw frontmatter.
+      const afterClose = raw.indexOf('\n', end + 1);
+      body = afterClose === -1 ? '' : raw.slice(afterClose + 1);
       for (const line of front.split('\n')) {
         const m = line.match(/^([a-z-]+):\s*(.*)$/);
         if (!m) continue;
@@ -559,6 +562,10 @@ const server = createServer(async (req, res) => {
       try {
         payload = await readJsonBody(req);
       } catch {
+        sendJson(res, 400, { error: 'invalid request body' });
+        return;
+      }
+      if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
         sendJson(res, 400, { error: 'invalid request body' });
         return;
       }

@@ -49,11 +49,21 @@ INITIATIVES="$FM_HOME/data/mission-control/initiatives"
 REGISTRY="$FM_HOME/data/mission-control/registry.md"
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Capture the listing up front so a tasks-axi failure stops the seed with its
+# error instead of reading an empty stream and reporting a zero-card success.
+LIST_ERR=$(mktemp)
+if ! LISTING=$( (cd "$FM_HOME" && tasks-axi list --fields held,hold_kind,hold_reason) 2>"$LIST_ERR" ); then
+  echo "error: tasks-axi list failed: $(tr '\n' ' ' < "$LIST_ERR")" >&2
+  rm -f "$LIST_ERR"
+  exit 1
+fi
+rm -f "$LIST_ERR"
+
 # Parse the tasks-axi listing (CSV rows indented under the tasks[...] header)
 # into tab-separated records: id, state, title, held, hold_kind, hold_reason.
 # Tabs inside free text are flattened to spaces so the record stays parseable.
 list_open_items() {
-  (cd "$FM_HOME" && tasks-axi list --fields held,hold_kind,hold_reason 2>/dev/null) \
+  printf '%s\n' "$LISTING" \
     | python3 -c '
 import csv, io, sys
 

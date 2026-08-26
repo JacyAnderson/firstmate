@@ -97,8 +97,11 @@ cmd_start() {
   FM_HOME="$FM_HOME" FM_MC_PORT="$PORT" nohup node "$SERVER" >> "$LOG_FILE" 2>&1 &
   pid=$!
   printf '%s\n' "$pid" > "$PID_FILE"
-  local i=0
-  while [ "$i" -lt 30 ]; do
+  # Probe readiness for up to FM_MC_READY_SECS seconds (default 10); a server
+  # that never answers is stopped and reported instead of being announced as
+  # started. Without curl the probe degrades to a process-liveness check.
+  local ready=0 i=0 max_polls=$(( ${FM_MC_READY_SECS:-10} * 5 ))
+  while [ "$i" -lt "$max_polls" ]; do
     kill -0 "$pid" 2>/dev/null || {
       echo "error: server exited at startup; last log lines:" >&2
       tail -5 "$LOG_FILE" >&2 2>/dev/null
@@ -106,14 +109,25 @@ cmd_start() {
       exit 1
     }
     if command -v curl >/dev/null 2>&1; then
-      curl -sf -o /dev/null "http://127.0.0.1:$PORT/api/cards" 2>/dev/null && break
+      if curl -sf -o /dev/null "http://127.0.0.1:$PORT/api/cards" 2>/dev/null; then
+        ready=1
+        break
+      fi
     else
       sleep 1
+      kill -0 "$pid" 2>/dev/null && ready=1
       break
     fi
     sleep 0.2
     i=$((i + 1))
   done
+  if [ "$ready" -ne 1 ]; then
+    echo "error: server did not answer on port $PORT within ${FM_MC_READY_SECS:-10}s; stopping it; last log lines:" >&2
+    tail -5 "$LOG_FILE" >&2 2>/dev/null
+    kill "$pid" 2>/dev/null
+    rm -f "$PID_FILE"
+    exit 1
+  fi
   echo "started (pid $pid) - board: http://127.0.0.1:$PORT/"
 }
 

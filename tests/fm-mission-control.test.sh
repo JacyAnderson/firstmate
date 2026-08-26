@@ -66,6 +66,10 @@ updated: 2026-08-25T10:00:00Z
 Parked while the release settles.
 EOF
 
+# Closing --- as the last bytes of the file, no trailing newline.
+printf -- '---\ntitle: Stub card\nstatus: active\nupdated: 2026-08-26T12:00:00Z\n---' \
+  > "$INITIATIVES/stub-card.md"
+
 # --- start the server on a free port -----------------------------------------
 
 started=0
@@ -109,6 +113,8 @@ assert_contains "$cards" '"href":"https://github.com/acme/web/pull/412","kind":"
 assert_contains "$cards" '"href":"/doc/fix-login-flakes/1","kind":"doc"' "local report link rendered as board doc link"
 assert_contains "$cards" '"latest":"The fix is in review with checks passing."' "latest update rendered without history"
 assert_contains "$cards" '"status":"parked"' "parked card rendered"
+assert_contains "$cards" '"title":"Stub card"' "frontmatter parsed when the closing --- has no trailing newline"
+assert_not_contains "$cards" 'title: Stub card' "raw frontmatter never leaks into a card body"
 pass "GET /api/cards renders initiative files"
 
 # --- local doc rendering and containment ---------------------------------------
@@ -162,6 +168,11 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/message" \
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/message" \
   -H 'content-type: text/plain' -d '{"slug":"fix-login-flakes","text":"cross-origin simple request"}')
 [ "$code" = 415 ] || fail "non-JSON content type accepted (got $code)"
+for body in 'null' '"a-string"' '[1,2]'; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/message" \
+    -H 'content-type: application/json' -d "$body")
+  [ "$code" = 400 ] || fail "non-object JSON body $body accepted (got $code)"
+done
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$BASE/api/cards")
 [ "$code" = 403 ] || fail "foreign Host header served (got $code)"
 raw_status=$(exec 3<>"/dev/tcp/127.0.0.1/$PORT" \
@@ -243,5 +254,23 @@ out=$(FM_MC_PORT=$PORT "$CLI" status)
 assert_contains "$out" "server: stopped" "status reports stopped"
 assert_contains "$out" "inbox check: registered" "check registration survives server stop"
 pass "stop halts the server and keeps the inbox check armed"
+
+# --- readiness-probe failure ---------------------------------------------------
+
+# A fake node that never listens: start must report the failed probe, stop the
+# process, and exit non-zero instead of printing started.
+fakebin=$(fm_fakebin "$HOME_DIR")
+cat > "$fakebin/node" <<'SH'
+#!/usr/bin/env bash
+sleep 30
+SH
+chmod +x "$fakebin/node"
+rc=0
+out=$(FM_MC_READY_SECS=1 FM_MC_PORT=$PORT PATH="$fakebin:$PATH" "$CLI" start 2>&1) || rc=$?
+expect_code 1 "$rc" "start with an unresponsive server"
+assert_contains "$out" "did not answer" "readiness failure is reported"
+assert_not_contains "$out" "started (pid" "an unresponsive server is never announced as started"
+assert_absent "$STATE/mission-control/server.pid" "no stale pid file after a failed readiness probe"
+pass "a failed readiness probe is reported instead of started"
 
 echo "ok - fm-mission-control"
