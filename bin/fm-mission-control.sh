@@ -18,8 +18,8 @@
 #                                            watcher inbox check
 #   fm-mission-control.sh -h | --help        print this header
 #
-# Port resolution: --port, else FM_MC_PORT, else 7460. The server binds
-# 127.0.0.1 only.
+# Port resolution: --port, else FM_MC_PORT, else 7460; binds 127.0.0.1 only.
+# start waits FM_MC_READY_SECS seconds (default 10) for readiness, else fails.
 #
 # Runtime records: state/mission-control/server.pid, state/mission-control/server.log.
 # The inbox check is the standard registered custom check (AGENTS.md section 7):

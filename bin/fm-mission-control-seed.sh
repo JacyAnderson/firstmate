@@ -17,8 +17,8 @@
 # captain-kind hold seeds status waiting-on-you with the hold reason as the
 # pending decision; every other open item seeds status active.
 #
-# Refuses (exit 1) when the configured backlog backend is manual, tasks-axi is
-# missing or incompatible, or python3 (needed to parse the listing) is absent.
+# Refuses (exit 1) when the backlog backend is manual, tasks-axi is missing,
+# incompatible, or its listing fails, or python3 (the parser) is absent.
 # --dry-run prints what would be created without writing anything.
 set -u
 

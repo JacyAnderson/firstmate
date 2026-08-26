@@ -96,6 +96,7 @@ The server binds `127.0.0.1` only and serves nothing beyond its own page, the ca
 Every request must carry a `Host` header of `127.0.0.1:<port>` or `localhost:<port>`; anything else is 403, which shuts out DNS-rebinding access.
 The POST endpoints additionally require a `Content-Type` of `application/json` (415 otherwise), so a cross-origin page cannot queue inbox events with a no-preflight simple request.
 A request target that fails URL parsing is refused with 400 rather than taking the server down.
+A POST body that does not parse as a JSON object (malformed JSON, `null`, a string, an array) is refused with 400 before any field is read.
 
 - `GET /` - the board page; it polls for card updates itself, so the captain refreshes nothing manually.
 - `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), and `latest` (the latest-update text).
