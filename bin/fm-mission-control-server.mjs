@@ -528,10 +528,16 @@ function readJsonBody(req) {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${HOST}:${PORT}`);
   try {
     if (!ALLOWED_HOSTS.has((req.headers.host || '').toLowerCase())) {
       sendJson(res, 403, { error: 'forbidden host' });
+      return;
+    }
+    let url;
+    try {
+      url = new URL(req.url, `http://${HOST}:${PORT}`);
+    } catch {
+      sendJson(res, 400, { error: 'invalid request target' });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/') {

@@ -164,9 +164,18 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/message" \
 [ "$code" = 415 ] || fail "non-JSON content type accepted (got $code)"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$BASE/api/cards")
 [ "$code" = 403 ] || fail "foreign Host header served (got $code)"
+raw_status=$(exec 3<>"/dev/tcp/127.0.0.1/$PORT" \
+  && printf 'GET http://a:99999999/ HTTP/1.1\r\nHost: 127.0.0.1:%s\r\nConnection: close\r\n\r\n' "$PORT" >&3 \
+  && head -1 <&3; exec 3>&- 3<&- 2>/dev/null || true)
+case "$raw_status" in
+  *" 400 "*) : ;;
+  *) fail "malformed absolute-form request target not refused with 400 (got: $raw_status)" ;;
+esac
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$BASE/api/cards" || true)
+[ "$code" = 200 ] || fail "server died after malformed request target (got $code)"
 after=$(find "$INBOX" -name '*.msg' | wc -l | tr -d ' ')
 [ "$before" = "$after" ] || fail "rejected input still wrote inbox files"
-pass "invalid slugs, actions, content types, hosts, and empty messages are refused without writes"
+pass "invalid slugs, actions, content types, hosts, request targets, and empty messages are refused without writes"
 
 # --- the server never mutates initiative files ----------------------------------
 
