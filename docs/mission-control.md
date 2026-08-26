@@ -52,7 +52,7 @@ Frontmatter is a block of `key: value` lines between two `---` lines, parsed lin
 - `work-items` (optional) - comma-separated backlog item ids linked to this initiative.
 - `decision` (optional, repeatable) - one pending captain decision per line; each renders as a badge on the card.
 - `link` (optional, repeatable) - `<label> <target>`, where the target is the last whitespace-separated token and the label is everything before it.
-  A target starting with `https://` renders as an external link (a PR, an MR, a dashboard).
+  A target starting with `https://` or `http://` renders as an external link (a PR, an MR, a dashboard).
   Any other target is a path relative to the home that must resolve under `data/`; the board renders that markdown file as HTML itself, so acting on a card never requires the terminal.
 
 The body above the first `## History` heading is the latest update: two to three sentences in plain outcome language (AGENTS.md section 9), no internal vocabulary.
@@ -93,6 +93,8 @@ Firstmate reads each file, acts on it under the `mission-control` skill, and del
 ## Server wire contract
 
 The server binds `127.0.0.1` only and serves nothing beyond its own page, the card data, and the renderings described here.
+Every request must carry a `Host` header of `127.0.0.1:<port>` or `localhost:<port>`; anything else is 403, which shuts out DNS-rebinding access.
+The POST endpoints additionally require a `Content-Type` of `application/json` (415 otherwise), so a cross-origin page cannot queue inbox events with a no-preflight simple request.
 
 - `GET /` - the board page; it polls for card updates itself, so the captain refreshes nothing manually.
 - `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), and `latest` (the latest-update text).

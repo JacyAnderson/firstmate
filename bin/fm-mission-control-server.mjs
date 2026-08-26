@@ -30,6 +30,7 @@ const DATA_DIR = join(HOME, 'data');
 const INITIATIVES_DIR = join(DATA_DIR, 'mission-control', 'initiatives');
 const INBOX_DIR = join(HOME, 'state', 'mission-control', 'inbox');
 
+const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ACTIONS = new Set(['park', 're-engage', 'drop']);
 const STATUSES = new Set(['active', 'waiting-on-you', 'parked']);
@@ -529,6 +530,10 @@ function readJsonBody(req) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
   try {
+    if (!ALLOWED_HOSTS.has((req.headers.host || '').toLowerCase())) {
+      sendJson(res, 403, { error: 'forbidden host' });
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/') {
       sendHtml(res, 200, boardPage());
       return;
@@ -539,6 +544,11 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'POST' && (url.pathname === '/api/message' || url.pathname === '/api/action')) {
+      const mediaType = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+      if (mediaType !== 'application/json') {
+        sendJson(res, 415, { error: 'content-type must be application/json' });
+        return;
+      }
       let payload;
       try {
         payload = await readJsonBody(req);

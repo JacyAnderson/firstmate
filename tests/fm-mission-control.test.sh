@@ -37,16 +37,25 @@ decision: Should Safari 16 stay supported?
 link: fix PR https://github.com/acme/web/pull/412
 link: investigation report data/mc-scout/report.md
 link: sneaky /etc/hosts
-link: traversal ../outside.md
+link: traversal data/../outside.md
+link: escape data/mc-scout/escape.md
 ---
 The fix is in review with checks passing.
 
 ## History
 - 2026-08-26T17:40:00Z: fix PR opened
 EOF
-printf '# Findings\n\nThe race is in **session refresh**.\n\n```\ncode <tag>\n```\n' \
-  > "$HOME_DIR/data/mc-scout/report.md"
+cat > "$HOME_DIR/data/mc-scout/report.md" <<'EOF'
+# Findings
+
+The race is in **session refresh**.
+
+```
+code <tag>
+```
+EOF
 printf 'outside data\n' > "$HOME_DIR/outside.md"
+ln -s "$HOME_DIR/outside.md" "$HOME_DIR/data/mc-scout/escape.md"
 
 cat > "$INITIATIVES/deploy-pipeline.md" <<'EOF'
 ---
@@ -115,6 +124,8 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/doc/fix-login-flakes/2")
 [ "$code" = 404 ] || fail "absolute path target served (got $code)"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/doc/fix-login-flakes/3")
 [ "$code" = 404 ] || fail "traversal target outside data/ served (got $code)"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/doc/fix-login-flakes/4")
+[ "$code" = 404 ] || fail "symlink escaping data/ served (got $code)"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/doc/no-such-card/0")
 [ "$code" = 404 ] || fail "unknown initiative served (got $code)"
 pass "doc rendering is contained to declared targets under data/"
@@ -148,9 +159,14 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/action" \
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/message" \
   -H 'content-type: application/json' -d '{"slug":"fix-login-flakes","text":"  "}')
 [ "$code" = 400 ] || fail "empty message accepted (got $code)"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/message" \
+  -H 'content-type: text/plain' -d '{"slug":"fix-login-flakes","text":"cross-origin simple request"}')
+[ "$code" = 415 ] || fail "non-JSON content type accepted (got $code)"
+code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$BASE/api/cards")
+[ "$code" = 403 ] || fail "foreign Host header served (got $code)"
 after=$(find "$INBOX" -name '*.msg' | wc -l | tr -d ' ')
 [ "$before" = "$after" ] || fail "rejected input still wrote inbox files"
-pass "invalid slugs, actions, and empty messages are refused without writes"
+pass "invalid slugs, actions, content types, hosts, and empty messages are refused without writes"
 
 # --- the server never mutates initiative files ----------------------------------
 
