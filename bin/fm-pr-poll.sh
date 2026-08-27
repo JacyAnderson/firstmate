@@ -101,8 +101,13 @@ wm_count_valid() {
 }
 
 wm_login_valid() {
+  local login=$1 base
   [ "$1" = - ] && return 0
-  case "$1" in
+  case "$login" in
+    *\[bot\]) base=${login%\[bot\]} ;;
+    *) base=$login ;;
+  esac
+  case "$base" in
     ''|*[!A-Za-z0-9-]*) return 1 ;;
   esac
   return 0

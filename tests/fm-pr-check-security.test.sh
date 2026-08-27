@@ -811,6 +811,23 @@ test_comment_watch_github() {
     FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-04T00:00:00Z\tdanger[bot]' run_poll "$dir")
   [ "$out" = 'pr-comments +1' ] || fail "a later foreign comment did not wake after an own reply: $out"
 
+  # GitHub App token identities retain their exact trailing [bot] suffix, and
+  # their own comments are filtered using that stored identity.
+  rm -f "$state/task-a.pr-comments"
+  out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_USER='coderabbitai[bot]' \
+    FM_TEST_GH_UPDATED_AT=2026-01-05T00:00:00Z run_poll "$dir")
+  [ -z "$out" ] || fail "GitHub App identity initialization produced output"
+  wm=$(printf 'fm-pr-comments-v1\ngithub coderabbitai[bot] 2026-01-05T00:00:00Z 2026-01-05T00:00:00Z')
+  [ "$(cat "$state/task-a.pr-comments")" = "$wm" ] \
+    || fail "GitHub App identity was not stored in the watermark"
+  out=$(FM_TEST_GH_STATE=OPEN \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-06T00:00:00Z\tcoderabbitai[bot]' run_poll "$dir")
+  [ -z "$out" ] || fail "poll woke on a GitHub App identity's own comment"
+  out=$(FM_TEST_GH_STATE=OPEN \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-07T00:00:00Z\tother-reviewer' run_poll "$dir")
+  [ "$out" = 'pr-comments +1' ] \
+    || fail "a foreign comment after a GitHub App reply did not wake: $out"
+
   # Comment endpoints failing degrade to merge-only: silent while open, and
   # merge detection is unaffected.
   out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_COMMENTS_FAIL=1 run_poll "$dir")
