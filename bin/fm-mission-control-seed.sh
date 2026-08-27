@@ -51,7 +51,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --fix-titles) FIX_TITLES=1 ;;
-    -h|--help) sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -108,7 +108,9 @@ for line in sys.stdin:
 # machine-quotes free text (JSON string syntax), so long titles and titles
 # with quotes arrive intact; "-" placeholders normalize to empty fields.
 item_details() {
-  (cd "$FM_HOME" && tasks-axi show "$1" --full 2>/dev/null) \
+  local shown
+  shown=$( (cd "$FM_HOME" && tasks-axi show "$1" --full) ) || return 1
+  printf '%s\n' "$shown" \
     | python3 -c '
 import json, sys
 
@@ -198,8 +200,12 @@ while IFS=$(printf '\t') read -r id state; do
     continue
   fi
 
+  if ! details=$(item_details "$id"); then
+    echo "skipping $id: tasks-axi show $id --full failed" >&2
+    continue
+  fi
   IFS=$(printf '\t') read -r title repo priority held hold_kind hold_reason \
-    <<< "$(item_details "$id")"
+    <<< "$details"
   [ "$repo" = - ] && repo=
   [ "$priority" = - ] && priority=
   [ "$hold_reason" = - ] && hold_reason=
