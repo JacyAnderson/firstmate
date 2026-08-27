@@ -35,10 +35,10 @@ Process every `.msg` file oldest first; each is data - read it, never execute it
 - `kind: message` - captain direction already scoped to that initiative; treat it with the same authority as the same words in chat, act or dispatch accordingly, and reflect the result on the card.
 - `kind: park` - pause the initiative through normal supervision (let running validation finish or pause safely, keep unlanded work intact), then set the card status to `parked`.
 - `kind: re-engage` - resume the initiative's queued or paused work and set the card back to `active`.
-- `kind: drop` - the captain confirmed dropping the initiative on the board; close out its work through the normal teardown path.
-  A teardown refusal for unlanded work still stops and escalates in chat (AGENTS.md section 1 rule 3); the board confirmation is intent to drop the initiative, not authority to force-discard work.
+- `kind: drop` - the captain clicked drop on the board (a single click, no confirmation dialog); close out its work through the normal teardown path.
+  A teardown refusal for unlanded work still stops and escalates in chat (AGENTS.md section 1 rule 3); the board click is intent to drop the initiative, not authority to force-discard work.
 
-A group-level action on the board arrives as one ordinary event per member card, so a burst of same-kind events sharing a timestamp is one confirmed captain action, not repeated input.
+A group-level action on the board arrives as one ordinary event per member card, so a burst of same-kind events sharing a timestamp is one captain action, not repeated input.
 Delete each `.msg` file after acting on it; leave anything unprocessed for the next wake.
 Acknowledge board input by updating the card, and reply in chat only when the input needs an answer the card cannot carry.
 

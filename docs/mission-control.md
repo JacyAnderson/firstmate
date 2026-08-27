@@ -95,6 +95,7 @@ Ship it without Safari 16 support.
 ```
 
 `kind` is one of `message`, `park`, `re-engage`, or `drop`; the body after the blank line is present only for `message`.
+Member events of one group action are all stamped with a single timestamp captured before the batch, so their `<epoch-ms>` name component and `ts` values match and a same-kind same-timestamp burst reliably reads as one captain action.
 Inbox files are data and are never executed by anything.
 Firstmate reads each file, acts on it under the `mission-control` skill, and deletes it; unprocessed files stay queued and are never lost, even across a server or firstmate crash.
 
@@ -111,12 +112,13 @@ A POST body that does not parse as a JSON object (malformed JSON, `null`, a stri
   The array is sorted by the ordering rule below; consumers may rely on that order.
 - `POST /api/message` - JSON `{"slug", "text"}`; appends a `message` inbox event; 400 on an invalid slug or empty text.
 - `POST /api/action` - JSON `{"slug", "action"}` with action `park`, `re-engage`, or `drop`; appends the matching inbox event; 400 otherwise.
-- `POST /api/group-action` - JSON `{"slugs": [...], "action"}` with the same three actions; appends one ordinary per-slug inbox event for each listed slug, so group actions need no new inbox kind and membership is fixed by the explicit list the captain confirmed - a card that joins the group later is never swept in.
+- `POST /api/group-action` - JSON `{"slugs": [...], "action"}` with the same three actions; appends one ordinary per-slug inbox event for each listed slug, so group actions need no new inbox kind and membership is fixed by the explicit list the board displayed when the captain clicked - a card that joins the group later is never swept in.
   The whole batch is validated first (every slug valid, 1-200 entries); any bad entry is 400 with nothing written, and duplicate slugs collapse to one event.
 - `GET /doc/<slug>/<n>` - renders the initiative's n-th local `link:` target as HTML.
   The path comes from the server's own parse of the initiative file, never from the client, and must resolve (symlinks included) under the home's `data/` directory; anything else is 404.
 
-Park and re-engage on a single card act immediately as inbox events; drop, and every group-level action, asks for confirmation first.
+Every single-card action, including drop, and the group-level drop act immediately as inbox events on one click; group-level park and re-engage ask for confirmation first.
+Each action button is disabled while its request is in flight, so a rapid double click cannot queue duplicate events.
 
 ## Ordering and grouping
 

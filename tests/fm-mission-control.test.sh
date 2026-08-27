@@ -145,6 +145,17 @@ assert_contains "$out" "Mission Control" "board page serves"
 assert_contains "$out" "id=\"board\"" "board page carries the card container"
 pass "board page renders"
 
+# One-click drop (docs/mission-control.md "Server wire contract"): neither the
+# per-card nor the group drop asks for confirmation, while group park and
+# re-engage keep theirs.
+assert_not_contains "$out" "closed out" "drop carries no confirmation prompt"
+assert_contains "$out" "drop.onclick = () => act(card.slug, 'drop'" "per-card drop is bound one-click"
+assert_contains "$out" "groupButton('Drop all', 'mini danger', (b) => groupAct(all, 'drop'" "group drop is bound one-click"
+assert_contains "$out" "confirm('Park " "group park still confirms"
+assert_contains "$out" "confirm('Re-engage " "group re-engage still confirms"
+assert_contains "$out" "if (btn) btn.disabled = true" "action buttons carry the in-flight double-click guard"
+pass "drop is one click on the board; group park and re-engage still confirm"
+
 cards=$(curl -sf "$BASE/api/cards")
 assert_contains "$cards" '"title":"Fix the flaky login tests"' "card title rendered from initiative file"
 assert_contains "$cards" '"status":"waiting-on-you"' "card status rendered"
@@ -228,6 +239,19 @@ for slug in study study-decision-1; do
   assert_grep "slug: $slug" "$f" "group action event for $slug names the member"
 done
 pass "a group action lands one inbox event per named member"
+
+# Shared batch timestamp (docs/mission-control.md "Inbox event format"): every
+# member event of one group action carries the same <epoch-ms> name component
+# and the same ts line, so a same-kind burst reads as one captain action.
+f_a=$(find "$INBOX" -name '*-study.msg' | head -1)
+f_b=$(find "$INBOX" -name '*-study-decision-1.msg' | head -1)
+ms_a=$(basename "$f_a" | cut -d- -f1)
+ms_b=$(basename "$f_b" | cut -d- -f1)
+[ "$ms_a" = "$ms_b" ] || fail "group action member events differ in epoch-ms ($ms_a vs $ms_b)"
+ts_a=$(grep '^ts: ' "$f_a")
+ts_b=$(grep '^ts: ' "$f_b")
+[ -n "$ts_a" ] && [ "$ts_a" = "$ts_b" ] || fail "group action member events differ in ts ($ts_a vs $ts_b)"
+pass "one group action stamps every member event with one shared timestamp"
 
 before=$(find "$INBOX" -name '*.msg' | wc -l | tr -d ' ')
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/group-action" \
