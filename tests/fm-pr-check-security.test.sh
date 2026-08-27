@@ -64,8 +64,25 @@ SH
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
+# The comment-watch endpoints answer only when a test opts in through their
+# FM_TEST_GH_* variables; with none set they print nothing and exit 0, so the
+# poll's comment path no-ops exactly as it does with no forge answer.
 case " $* " in
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
+  *" api user "*)
+    [ -z "${FM_TEST_GH_USER:-}" ] || printf '%s\n' "$FM_TEST_GH_USER"
+    ;;
+  *" --jq .updated_at "*)
+    [ -z "${FM_TEST_GH_UPDATED_AT:-}" ] || printf '%s\n' "$FM_TEST_GH_UPDATED_AT"
+    ;;
+  *"/issues/"*"/comments?"*)
+    [ "${FM_TEST_GH_COMMENTS_FAIL:-0}" = 0 ] || exit 1
+    [ -z "${FM_TEST_GH_ISSUE_COMMENTS:-}" ] || printf '%s\n' "$FM_TEST_GH_ISSUE_COMMENTS"
+    ;;
+  *"/pulls/"*"/comments?"*)
+    [ "${FM_TEST_GH_COMMENTS_FAIL:-0}" = 0 ] || exit 1
+    [ -z "${FM_TEST_GH_REVIEW_COMMENTS:-}" ] || printf '%s\n' "$FM_TEST_GH_REVIEW_COMMENTS"
+    ;;
   *" state "*)
     [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
     [ "${FM_TEST_GH_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GH_SLEEP"
@@ -86,6 +103,9 @@ printf '%s\n' "$*" >> "$FM_TEST_GLAB_LOG"
 [ "${FM_TEST_GLAB_FAIL:-0}" = 0 ] || exit 1
 [ "${FM_TEST_GLAB_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GLAB_SLEEP"
 printf 'title:\tfixture merge request\nstate:\t%s\nauthor:\tsomeone\n' "${FM_TEST_GLAB_STATE:-opened}"
+# The comments field appears only when a test opts in, so legacy expectations
+# about the field output stay byte-identical for every other test.
+[ -z "${FM_TEST_GLAB_COMMENTS:-}" ] || printf 'comments:\t%s\n' "$FM_TEST_GLAB_COMMENTS"
 SH
   chmod +x "$fakebin/gh" "$fakebin/gh-axi" "$fakebin/glab"
   : > "$dir/gh.log"
@@ -749,6 +769,180 @@ test_static_poll_contract() {
   [ "$rc" -eq 0 ] || fail "watcher did not surface merged poll"
   [ "$(grep -c '^check: .*: merged$' "$dir/watch.out")" -eq 1 ] || fail "watcher did not convert merged output into exactly one wake"
   pass "static poll is silent except for one merged line and remains watcher-bounded"
+}
+
+test_comment_watch_github() {
+  local dir state out wm
+  dir=$(make_case comment-watch-github)
+  state="$dir/home/state"
+  make_poll_fixture "$dir"
+
+  # First arm: the poll anchors the watermark at the PR's updated_at and stays
+  # silent, so pre-existing comments never wake.
+  out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_USER=fm-bot \
+    FM_TEST_GH_UPDATED_AT=2026-01-01T00:00:00Z run_poll "$dir")
+  [ -z "$out" ] || fail "first poll after arming woke on pre-existing comments"
+  [ -f "$state/task-a.pr-comments" ] || fail "first poll did not initialize the comment watermark"
+  [ "$(file_mode "$state/task-a.pr-comments")" = 600 ] || fail "comment watermark is not private"
+  wm=$(printf 'fm-pr-comments-v1\ngithub fm-bot 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z')
+  [ "$(cat "$state/task-a.pr-comments")" = "$wm" ] \
+    || fail "comment watermark record is not the initialized anchor"
+
+  # New review-bot comments on both sources wake once with the summed delta.
+  out=$(FM_TEST_GH_STATE=OPEN \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-02T00:00:00Z\tcoderabbitai[bot]' \
+    FM_TEST_GH_REVIEW_COMMENTS=$'2026-01-02T00:01:00Z\tcoderabbitai[bot]\n2026-01-02T00:02:00Z\tcoderabbitai[bot]' \
+    run_poll "$dir")
+  [ "$out" = 'pr-comments +3' ] || fail "new review comments did not wake with the count delta: $out"
+
+  # The advanced watermark absorbs the same forge answer: no re-wake without
+  # new activity.
+  out=$(FM_TEST_GH_STATE=OPEN \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-02T00:00:00Z\tcoderabbitai[bot]' \
+    FM_TEST_GH_REVIEW_COMMENTS=$'2026-01-02T00:01:00Z\tcoderabbitai[bot]\n2026-01-02T00:02:00Z\tcoderabbitai[bot]' \
+    run_poll "$dir")
+  [ -z "$out" ] || fail "poll re-woke without new comment activity"
+
+  # The token identity's own replies advance the watermark silently.
+  out=$(FM_TEST_GH_STATE=OPEN \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-03T00:00:00Z\tfm-bot' run_poll "$dir")
+  [ -z "$out" ] || fail "poll woke on the token identity's own reply"
+  out=$(FM_TEST_GH_STATE=OPEN \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-04T00:00:00Z\tdanger[bot]' run_poll "$dir")
+  [ "$out" = 'pr-comments +1' ] || fail "a later foreign comment did not wake after an own reply: $out"
+
+  # Comment endpoints failing degrade to merge-only: silent while open, and
+  # merge detection is unaffected.
+  out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_COMMENTS_FAIL=1 run_poll "$dir")
+  [ -z "$out" ] || fail "a failed comment lookup produced output"
+  out=$(FM_TEST_GH_STATE=MERGED FM_TEST_GH_COMMENTS_FAIL=1 run_poll "$dir")
+  [ "$out" = merged ] || fail "merge detection broke while comments were unavailable"
+  out=$(FM_TEST_GH_STATE=MERGED \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-02-01T00:00:00Z\tcoderabbitai[bot]' run_poll "$dir")
+  [ "$out" = merged ] || fail "a merged PR emitted more than the merged line"
+
+  # A corrupted watermark record is re-initialized silently, never trusted.
+  printf 'garbage\n' > "$state/task-a.pr-comments"
+  chmod 0600 "$state/task-a.pr-comments"
+  out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_USER=fm-bot \
+    FM_TEST_GH_UPDATED_AT=2026-03-01T00:00:00Z run_poll "$dir")
+  [ -z "$out" ] || fail "a corrupted watermark produced output"
+  wm=$(printf 'fm-pr-comments-v1\ngithub fm-bot 2026-03-01T00:00:00Z 2026-03-01T00:00:00Z')
+  [ "$(cat "$state/task-a.pr-comments")" = "$wm" ] \
+    || fail "a corrupted watermark was not re-initialized"
+
+  # With no forge anchor available there is no watermark and no wake.
+  rm -f "$state/task-a.pr-comments"
+  out=$(FM_TEST_GH_STATE=OPEN run_poll "$dir")
+  [ -z "$out" ] || fail "poll emitted with no watermark anchor available"
+  [ ! -e "$state/task-a.pr-comments" ] || fail "poll initialized a watermark without a forge anchor"
+
+  # The six-argument validated form stays merge-only for compatibility.
+  out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_USER=fm-bot \
+    FM_TEST_GH_UPDATED_AT=2026-01-01T00:00:00Z FM_TEST_GH_LOG="$dir/gh.log" \
+    PATH="$dir/fakebin:$BASE_PATH" \
+    bash "$POLL" --validated github https://github.com/o/r/pull/1 github.com o/r 1)
+  [ -z "$out" ] || fail "six-argument validated poll stopped being merge-only"
+  [ ! -e "$state/task-a.pr-comments" ] || fail "six-argument validated poll wrote a watermark"
+  pass "GitHub comment watch wakes once per foreign delta and degrades to merge-only"
+}
+
+test_comment_watch_gitlab() {
+  local dir state out url
+  dir=$(make_case comment-watch-gitlab)
+  state="$dir/home/state"
+  url=https://gitlab.example/group/subgroup/project/-/merge_requests/7
+  cp "$POLL" "$state/task-a.check.sh"
+  printf '%s\n%s\n%s\n%s\n%s\n' \
+    gitlab "$url" gitlab.example group/subgroup/project 7 > "$state/task-a.pr-poll"
+  chmod 0600 "$state/task-a.check.sh" "$state/task-a.pr-poll"
+
+  # First arm stores the current user-note count silently.
+  out=$(FM_TEST_GLAB_COMMENTS=2 run_poll "$dir")
+  [ -z "$out" ] || fail "first GitLab poll woke on pre-existing notes"
+  [ "$(cat "$state/task-a.pr-comments")" = "$(printf 'fm-pr-comments-v1\ngitlab 2')" ] \
+    || fail "GitLab watermark record is not the initial note count"
+
+  # Note authors are not cheaply distinguishable through plain glab, so any
+  # increase wakes and the supervisor triages.
+  out=$(FM_TEST_GLAB_COMMENTS=5 run_poll "$dir")
+  [ "$out" = 'pr-comments +3' ] || fail "new GitLab notes did not wake with the count delta: $out"
+  out=$(FM_TEST_GLAB_COMMENTS=5 run_poll "$dir")
+  [ -z "$out" ] || fail "GitLab poll re-woke without new notes"
+
+  # A removed note lowers the stored count silently so the next real note
+  # still wakes.
+  out=$(FM_TEST_GLAB_COMMENTS=4 run_poll "$dir")
+  [ -z "$out" ] || fail "a removed note woke the poll"
+  out=$(FM_TEST_GLAB_COMMENTS=5 run_poll "$dir")
+  [ "$out" = 'pr-comments +1' ] || fail "the stored count did not follow a removed note: $out"
+
+  # Forge failure and a missing field both degrade silently without touching
+  # the watermark, and merge detection is unaffected.
+  out=$(FM_TEST_GLAB_FAIL=1 FM_TEST_GLAB_COMMENTS=9 run_poll "$dir")
+  [ -z "$out" ] || fail "GitLab poll emitted while glab was failing"
+  out=$(run_poll "$dir")
+  [ -z "$out" ] || fail "a missing comments field produced output"
+  [ "$(cat "$state/task-a.pr-comments")" = "$(printf 'fm-pr-comments-v1\ngitlab 5')" ] \
+    || fail "a missing comments field changed the watermark"
+  out=$(FM_TEST_GLAB_STATE=merged FM_TEST_GLAB_COMMENTS=9 run_poll "$dir")
+  [ "$out" = merged ] || fail "GitLab merge detection changed with comment detection active"
+  pass "GitLab comment watch wakes on note-count increase and degrades to merge-only"
+}
+
+test_comment_watch_watcher_and_rearm() {
+  local dir state out rc
+  dir=$(make_case comment-watch-watcher)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  fm_pr_poll_prepare "$state" task-a github https://github.com/o/r/pull/1 github.com o/r 1 "$POLL" \
+    || fail "could not prepare the comment-watch watcher poll"
+  fm_pr_poll_publish_prepared || fail "could not publish the comment-watch watcher poll"
+  printf 'fm-pr-comments-v1\ngithub fm-bot 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z\n' \
+    > "$state/task-a.pr-comments"
+  chmod 0600 "$state/task-a.pr-comments"
+
+  # The watcher converts the poll's delta into one distinct check wake naming
+  # the armed task's check and the count.
+  rm -f "$state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=OPEN \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-02T00:00:00Z\tcoderabbitai[bot]' \
+    FM_TEST_GH_REVIEW_COMMENTS=$'2026-01-02T00:01:00Z\tcoderabbitai[bot]' \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "watcher did not surface the comment wake"
+  [ "$(grep -c '^check: .*task-a.check.sh: pr-comments +2$' "$dir/watch.out")" -eq 1 ] \
+    || fail "watcher did not convert the comment delta into exactly one check wake"
+
+  # The same forge answer produces no second wake: the watcher runs to its
+  # bound instead of exiting on a wake.
+  rm -f "$state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=OPEN \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-01-02T00:00:00Z\tcoderabbitai[bot]' \
+    FM_TEST_GH_REVIEW_COMMENTS=$'2026-01-02T00:01:00Z\tcoderabbitai[bot]' \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch2.out" 2> "$dir/watch2.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 124 ] || fail "watcher exited unexpectedly on an unchanged forge answer"
+  ! grep -q 'pr-comments' "$dir/watch2.out" || fail "watcher re-woke without new comment activity"
+
+  # Re-arming resets the watermark so the next poll re-initializes silently:
+  # the documented upgrade path for tasks armed before comment detection.
+  dir=$(make_case comment-watch-rearm)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>&1 \
+    || fail "could not arm the re-arm fixture"
+  printf 'fm-pr-comments-v1\ngithub fm-bot 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z\n' \
+    > "$state/task-a.pr-comments"
+  chmod 0600 "$state/task-a.pr-comments"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/2 >/dev/null 2>&1 \
+    || fail "could not re-arm over the live poll"
+  [ ! -e "$state/task-a.pr-comments" ] || fail "re-arm kept a stale comment watermark"
+  pass "watcher surfaces one comment wake per delta and re-arm resets the watermark"
 }
 
 test_atomic_interruption_leaves_no_partial_artifact() {
@@ -2597,6 +2791,8 @@ test_teardown_removes_poll_artifacts() {
   printf 'data\n' > "$dir/home/state/task-a.pr-poll"
   printf 'registration\n' > "$dir/home/state/task-a.pr-poll-registration"
   printf 'trust\n' > "$dir/home/state/task-a.check-trust"
+  printf 'fm-pr-comments-v1\ngithub - 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z\n' \
+    > "$dir/home/state/task-a.pr-comments"
   mkdir -p "$dir/home/state/.pr-check-quarantine"
   chmod 0700 "$dir/home/state/.pr-check-quarantine"
   printf 'legacy\n' > "$dir/home/state/.pr-check-quarantine/task-a.check.abc123"
@@ -2615,6 +2811,7 @@ SH
   [ ! -e "$dir/home/state/task-a.pr-poll" ] || fail "teardown left the sidecar"
   [ ! -e "$dir/home/state/task-a.pr-poll-registration" ] || fail "teardown left the PR poll registration"
   [ ! -e "$dir/home/state/task-a.check-trust" ] || fail "teardown left the custom check registration"
+  [ ! -e "$dir/home/state/task-a.pr-comments" ] || fail "teardown left the comment watermark"
   ! find "$dir/home/state/.pr-check-quarantine" -name 'task-a.*' -print 2>/dev/null | grep . >/dev/null \
     || fail "teardown left task quarantine artifacts"
 
@@ -2845,6 +3042,9 @@ test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
+test_comment_watch_github
+test_comment_watch_gitlab
+test_comment_watch_watcher_and_rearm
 test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication
 test_postrename_poll_validation_revokes_and_retries
