@@ -95,6 +95,7 @@ Ship it without Safari 16 support.
 ```
 
 `kind` is one of `message`, `park`, `re-engage`, or `drop`; the body after the blank line is present only for `message`.
+Member events of one group action are all stamped with a single timestamp captured before the batch, so their `<epoch-ms>` name component and `ts` values match and a same-kind same-timestamp burst reliably reads as one captain action.
 Inbox files are data and are never executed by anything.
 Firstmate reads each file, acts on it under the `mission-control` skill, and deletes it; unprocessed files stay queued and are never lost, even across a server or firstmate crash.
 
@@ -117,6 +118,7 @@ A POST body that does not parse as a JSON object (malformed JSON, `null`, a stri
   The path comes from the server's own parse of the initiative file, never from the client, and must resolve (symlinks included) under the home's `data/` directory; anything else is 404.
 
 Every single-card action, including drop, and the group-level drop act immediately as inbox events on one click; group-level park and re-engage ask for confirmation first.
+Each action button is disabled while its request is in flight, so a rapid double click cannot queue duplicate events.
 
 ## Ordering and grouping
 

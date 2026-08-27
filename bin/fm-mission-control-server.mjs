@@ -167,12 +167,12 @@ function cardLinks(card) {
 
 // --- inbox writes ------------------------------------------------------------
 
-function writeInboxEvent(kind, slug, text) {
+function writeInboxEvent(kind, slug, text, epochMs = Date.now()) {
   mkdirSync(INBOX_DIR, { recursive: true });
   inboxSeq = (inboxSeq + 1) % 10000;
-  const name = `${Date.now()}-${inboxSeq}-${slug}.msg`;
+  const name = `${epochMs}-${inboxSeq}-${slug}.msg`;
   const body = kind === 'message' ? `\n${text.trim()}\n` : '\n';
-  const content = `kind: ${kind}\nslug: ${slug}\nts: ${new Date().toISOString()}\n${body}`;
+  const content = `kind: ${kind}\nslug: ${slug}\nts: ${new Date(epochMs).toISOString()}\n${body}`;
   writeFileSync(join(INBOX_DIR, name), content, { flag: 'wx', mode: 0o600 });
 }
 
@@ -418,26 +418,31 @@ const BOARD_JS = `
     controls.appendChild(send);
     if (card.status === 'parked') {
       const re = el('button', null, 'Re-engage');
-      re.onclick = () => act(card.slug, 're-engage', 'Re-engaging.');
+      re.onclick = () => act(card.slug, 're-engage', 'Re-engaging.', re);
       controls.appendChild(re);
     } else {
       const park = el('button', null, 'Park');
-      park.onclick = () => act(card.slug, 'park', 'Parked.');
+      park.onclick = () => act(card.slug, 'park', 'Parked.', park);
       controls.appendChild(park);
     }
     const drop = el('button', 'danger', 'Drop');
-    drop.onclick = () => act(card.slug, 'drop', 'Drop requested.');
+    drop.onclick = () => act(card.slug, 'drop', 'Drop requested.', drop);
     controls.appendChild(drop);
     div.appendChild(controls);
     return div;
   }
 
-  async function act(slug, action, doneMsg) {
+  // The button stays disabled while its request is in flight so a rapid
+  // double click cannot queue duplicate events; re-enabling matters only on
+  // failure, since a success re-renders the card and replaces the button.
+  async function act(slug, action, doneMsg, btn) {
+    if (btn) btn.disabled = true;
     try {
       await post('/api/action', { slug, action });
       toast(doneMsg);
       refresh(true);
     } catch { toast('Could not send \\u2014 try again.'); }
+    finally { if (btn) btn.disabled = false; }
   }
 
   function saveDrafts() {
@@ -487,12 +492,14 @@ const BOARD_JS = `
     return n + ' ' + word + (n === 1 ? '' : 's');
   }
 
-  async function groupAct(slugs, action, doneMsg) {
+  async function groupAct(slugs, action, doneMsg, btn) {
+    if (btn) btn.disabled = true;
     try {
       await post('/api/group-action', { slugs, action });
       toast(doneMsg);
       refresh(true);
     } catch { toast('Could not send \\u2014 try again.'); }
+    finally { if (btn) btn.disabled = false; }
   }
 
   function groupButton(label, cls, handler) {
@@ -500,7 +507,7 @@ const BOARD_JS = `
     b.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      handler();
+      handler(b);
     };
     return b;
   }
@@ -516,18 +523,18 @@ const BOARD_JS = `
     const parked = members.filter((c) => c.status === 'parked').map((c) => c.slug);
     const all = members.map((c) => c.slug);
     if (notParked.length) {
-      actions.appendChild(groupButton('Park all', 'mini', () => {
+      actions.appendChild(groupButton('Park all', 'mini', (b) => {
         if (!confirm('Park ' + plural(notParked.length, 'initiative') + ' under "' + title + '"?')) return;
-        groupAct(notParked, 'park', 'Parked.');
+        groupAct(notParked, 'park', 'Parked.', b);
       }));
     }
     if (parked.length) {
-      actions.appendChild(groupButton('Re-engage all', 'mini', () => {
+      actions.appendChild(groupButton('Re-engage all', 'mini', (b) => {
         if (!confirm('Re-engage ' + plural(parked.length, 'initiative') + ' under "' + title + '"?')) return;
-        groupAct(parked, 're-engage', 'Re-engaging.');
+        groupAct(parked, 're-engage', 'Re-engaging.', b);
       }));
     }
-    actions.appendChild(groupButton('Drop all', 'mini danger', () => groupAct(all, 'drop', 'Drop requested.')));
+    actions.appendChild(groupButton('Drop all', 'mini danger', (b) => groupAct(all, 'drop', 'Drop requested.', b)));
     summary.appendChild(actions);
     details.appendChild(summary);
     for (const c of members) details.appendChild(renderCard(c));
@@ -729,7 +736,11 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'invalid slugs' });
         return;
       }
-      for (const slug of new Set(slugs)) writeInboxEvent(action, slug, '');
+      // One timestamp captured before the batch: member events of one group
+      // action must share their epoch-ms and ts so the consumer can read a
+      // same-kind same-timestamp burst as one captain action.
+      const batchMs = Date.now();
+      for (const slug of new Set(slugs)) writeInboxEvent(action, slug, '', batchMs);
       sendJson(res, 200, { ok: true });
       return;
     }
