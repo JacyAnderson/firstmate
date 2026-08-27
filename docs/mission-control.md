@@ -31,6 +31,8 @@ Every component (server, poll script, seed helper) validates slugs against this 
 title: Fix the flaky login tests
 status: waiting-on-you
 updated: 2026-08-26T17:40:00Z
+area: acme-web
+priority: 1
 work-items: login-flake-f3, login-flake-audit-a1
 decision: Should Safari 16 stay supported?
 link: fix PR https://github.com/acme/web/pull/412
@@ -49,6 +51,12 @@ Frontmatter is a block of `key: value` lines between two `---` lines, parsed lin
 - `title` (required) - the initiative in the captain's own words.
 - `status` (required) - `active`, `waiting-on-you`, or `parked`; an unknown value renders as `active`.
 - `updated` (required) - ISO 8601 UTC timestamp of the last update write; drives card sorting.
+- `area` (optional) - the repo or focus area the initiative belongs to; the board groups cards into one section per area, and cards without one land in the General section.
+  The seed fills it from the backlog item's repo field.
+- `umbrella` (optional) - the slug of a parent initiative; cards sharing an umbrella value render as one group under that name inside their area, with group-level park, re-engage, and drop controls.
+  A card whose own slug equals the umbrella value is the group's head card and lends the group its title.
+  The seed derives it from backlog ids of the form `<parent>-decision-<rest>`; firstmate sets it directly for other parent-child shapes.
+- `priority` (optional) - the backlog priority 0-4 (0 most urgent), copied from the backlog item when present; feeds the ordering rule below and renders as a `P<n>` chip.
 - `work-items` (optional) - comma-separated backlog item ids linked to this initiative.
 - `decision` (optional, repeatable) - one pending captain decision per line; each renders as a badge on the card.
 - `link` (optional, repeatable) - `<label> <target>`, where the target is the last whitespace-separated token and the label is everything before it.
@@ -99,14 +107,28 @@ A request target that fails URL parsing is refused with 400 rather than taking t
 A POST body that does not parse as a JSON object (malformed JSON, `null`, a string, an array) is refused with 400 before any field is read.
 
 - `GET /` - the board page; it polls for card updates itself, so the captain refreshes nothing manually.
-- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), and `latest` (the latest-update text).
+- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), and `latest` (the latest-update text).
+  The array is sorted by the ordering rule below; consumers may rely on that order.
 - `POST /api/message` - JSON `{"slug", "text"}`; appends a `message` inbox event; 400 on an invalid slug or empty text.
 - `POST /api/action` - JSON `{"slug", "action"}` with action `park`, `re-engage`, or `drop`; appends the matching inbox event; 400 otherwise.
+- `POST /api/group-action` - JSON `{"slugs": [...], "action"}` with the same three actions; appends one ordinary per-slug inbox event for each listed slug, so group actions need no new inbox kind and membership is fixed by the explicit list the captain confirmed - a card that joins the group later is never swept in.
+  The whole batch is validated first (every slug valid, 1-200 entries); any bad entry is 400 with nothing written.
 - `GET /doc/<slug>/<n>` - renders the initiative's n-th local `link:` target as HTML.
   The path comes from the server's own parse of the initiative file, never from the client, and must resolve (symlinks included) under the home's `data/` directory; anything else is 404.
 
-The board sorts waiting-on-you first, then active by recency, with parked collapsed at the bottom for browsing and one-click re-engage.
-Park and re-engage act immediately as inbox events; drop asks for confirmation first.
+Park and re-engage on a single card act immediately as inbox events; drop, and every group-level action, asks for confirmation first.
+
+## Ordering and grouping
+
+`GET /api/cards` returns cards sorted by need, most captain-attention first:
+
+1. Status rank: `waiting-on-you`, then `active`, then `parked`.
+2. Within a status: `priority` ascending (0 first); a card without one is treated as 3, so explicit 0-2 outrank unprioritized cards and 4 falls below them.
+3. Then `updated` recency, newest first, with the slug as a stable tie-break.
+
+The board renders one collapsible section per `area` (cards without one land in General), with umbrella groups nested inside their area.
+Sections, groups, and the cards inside them all keep the sorted order, and each section or group appears at the position of its own neediest card, so the neediest area is always on top.
+A section or group starts open only when something in it is waiting on the captain; everything else starts as a one-line summary with per-status counts, which keeps the board scannable at a hundred cards.
 
 ## Watcher integration
 

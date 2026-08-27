@@ -36,6 +36,10 @@ const ACTIONS = new Set(['park', 're-engage', 'drop']);
 const STATUSES = new Set(['active', 'waiting-on-you', 'parked']);
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_MESSAGE_CHARS = 10000;
+const MAX_GROUP_SLUGS = 200;
+// Sorting ranks (docs/mission-control.md "Ordering"): lower sorts first.
+const STATUS_RANK = { 'waiting-on-you': 0, active: 1, parked: 2 };
+const DEFAULT_PRIORITY = 3;
 
 let inboxSeq = 0;
 
@@ -47,6 +51,9 @@ function parseInitiative(slug, raw) {
     title: slug,
     status: 'active',
     updated: '',
+    area: '',
+    umbrella: '',
+    priority: null,
     workItems: [],
     decisions: [],
     links: [],
@@ -69,6 +76,9 @@ function parseInitiative(slug, raw) {
         if (key === 'title') card.title = value;
         else if (key === 'status') card.status = STATUSES.has(value) ? value : 'active';
         else if (key === 'updated') card.updated = value;
+        else if (key === 'area') card.area = value;
+        else if (key === 'umbrella') card.umbrella = SLUG_RE.test(value) ? value : '';
+        else if (key === 'priority') card.priority = /^[0-4]$/.test(value) ? Number(value) : null;
         else if (key === 'work-items') card.workItems = value.split(',').map((s) => s.trim()).filter(Boolean);
         else if (key === 'decision') card.decisions.push(value);
         else if (key === 'link') {
@@ -107,7 +117,21 @@ function listCards() {
       // An unreadable card is skipped rather than taking the board down.
     }
   }
-  return cards;
+  return cards.sort(compareNeed);
+}
+
+// The documented ordering rule (docs/mission-control.md "Ordering"): status
+// rank, then backlog priority (0 most urgent, missing treated as 3), then
+// recency, then slug as a stable tie-break. /api/cards returns this order and
+// the board derives group order from it (first appearance wins).
+function compareNeed(a, b) {
+  const status = (STATUS_RANK[a.status] ?? 1) - (STATUS_RANK[b.status] ?? 1);
+  if (status) return status;
+  const priority = (a.priority ?? DEFAULT_PRIORITY) - (b.priority ?? DEFAULT_PRIORITY);
+  if (priority) return priority;
+  const recency = (Date.parse(b.updated) || 0) - (Date.parse(a.updated) || 0);
+  if (recency) return recency;
+  return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
 }
 
 // A local doc target is served only when the initiative file itself declared
@@ -251,7 +275,6 @@ const PAGE_CSS = `
          background: #f4f5f7; color: #1c1e21; max-width: 860px; margin-inline: auto; }
   @media (prefers-color-scheme: dark) { body { background: #16181c; color: #e6e8eb; } }
   h1 { font-size: 20px; margin: 0 0 16px; }
-  h2.section { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; opacity: .6; margin: 24px 0 8px; }
   .card { background: #fff; border: 1px solid rgba(0,0,0,.1); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
   @media (prefers-color-scheme: dark) { .card { background: #1f2228; border-color: rgba(255,255,255,.12); } }
   .card.waiting { border-left: 4px solid #d97706; }
@@ -261,7 +284,32 @@ const PAGE_CSS = `
   .chip.active { background: #dcfce7; color: #14532d; }
   .chip.waiting-on-you { background: #fef3c7; color: #92400e; }
   .chip.parked { background: #e5e7eb; color: #374151; }
+  .chip.prio { background: #ede9fe; color: #5b21b6; font-weight: 600; }
   .time { font-size: 12px; opacity: .55; white-space: nowrap; }
+  .board-summary { font-size: 13px; opacity: .65; margin: 0 0 16px; }
+  details.area-section { margin-bottom: 10px; }
+  details.area-section > summary { cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    background: #fff; border: 1px solid rgba(0,0,0,.1); border-radius: 10px; font-weight: 600; font-size: 14px; }
+  @media (prefers-color-scheme: dark) { details.area-section > summary { background: #1f2228; border-color: rgba(255,255,255,.12); } }
+  details.area-section > summary::before { content: '\\25B8'; font-size: 11px; opacity: .5; }
+  details.area-section[open] > summary::before { content: '\\25BE'; }
+  details.area-section > .card, details.area-section > details.umbrella { margin-left: 18px; }
+  details.area-section > :nth-child(2) { margin-top: 10px; }
+  .area-name { flex: 1; }
+  .counts { display: inline-flex; gap: 6px; }
+  .count { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(0,0,0,.07); white-space: nowrap; }
+  @media (prefers-color-scheme: dark) { .count { background: rgba(255,255,255,.1); } }
+  .count.waiting { background: #fef3c7; color: #92400e; font-weight: 600; }
+  .count.parked { opacity: .7; }
+  details.umbrella { margin: 0 0 12px 18px; border-left: 2px solid rgba(0,0,0,.12); padding-left: 12px; }
+  @media (prefers-color-scheme: dark) { details.umbrella { border-left-color: rgba(255,255,255,.18); } }
+  details.umbrella > summary { cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 13px;
+    font-weight: 600; padding: 6px 2px; flex-wrap: wrap; }
+  details.umbrella > summary::before { content: '\\25B8'; font-size: 10px; opacity: .5; }
+  details.umbrella[open] > summary::before { content: '\\25BE'; }
+  .group-title { flex: 1; }
+  .group-actions { display: inline-flex; gap: 6px; }
+  button.mini { font-size: 11px; padding: 3px 8px; }
   .badges { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
   .badge { font-size: 12px; background: #fee2e2; color: #991b1b; border-radius: 6px; padding: 2px 8px; }
   .latest { margin: 8px 0 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
@@ -278,7 +326,6 @@ const PAGE_CSS = `
   @media (prefers-color-scheme: dark) { button:hover { background: rgba(255,255,255,.08); } }
   button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
   button.danger { color: #b91c1c; }
-  details.parked-section summary { cursor: pointer; font-size: 13px; opacity: .7; margin: 24px 0 8px; }
   .empty { opacity: .6; font-size: 14px; margin: 32px 0; }
   .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1c1e21; color: #fff;
            border-radius: 8px; padding: 8px 16px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
@@ -331,6 +378,7 @@ const BOARD_JS = `
     div.dataset.slug = card.slug;
     const head = el('div', 'card-head');
     head.appendChild(el('h3', 'card-title', card.title));
+    if (card.priority !== null && card.priority !== undefined) head.appendChild(el('span', 'chip prio', 'P' + card.priority));
     head.appendChild(el('span', 'chip ' + card.status, card.status === 'waiting-on-you' ? 'waiting on you' : card.status));
     const time = el('span', 'time', relTime(card.updated));
     time.title = card.updated;
@@ -414,33 +462,136 @@ const BOARD_JS = `
     }
   }
 
-  function render(cards) {
-    const state = saveDrafts();
-    const root = document.getElementById('board');
-    root.textContent = '';
-    const waiting = cards.filter((c) => c.status === 'waiting-on-you');
-    const active = cards.filter((c) => c.status === 'active');
-    const parked = cards.filter((c) => c.status === 'parked');
-    const byRecency = (a, b) => (Date.parse(b.updated) || 0) - (Date.parse(a.updated) || 0);
-    waiting.sort(byRecency);
-    active.sort(byRecency);
-    parked.sort(byRecency);
-    if (!cards.length) {
-      root.appendChild(el('div', 'empty', 'No initiatives yet.'));
-    }
-    if (waiting.length) {
-      root.appendChild(el('h2', 'section', 'Waiting on you'));
-      for (const c of waiting) root.appendChild(renderCard(c));
-    }
-    if (active.length) {
-      root.appendChild(el('h2', 'section', 'Active'));
-      for (const c of active) root.appendChild(renderCard(c));
+  // Explicit user toggles survive re-renders: current open states are read
+  // back from the DOM before each render and reapplied by key; a section seen
+  // for the first time defaults to open only when something in it waits on
+  // the captain.
+  function saveOpen() {
+    const map = {};
+    for (const d of document.querySelectorAll('details[data-key]')) map[d.dataset.key] = d.open;
+    return map;
+  }
+
+  function applyOpen(details, open, fallback) {
+    details.open = details.dataset.key in open ? open[details.dataset.key] : fallback;
+  }
+
+  function countChips(group) {
+    const wrap = el('span', 'counts');
+    const waiting = group.filter((c) => c.status === 'waiting-on-you').length;
+    const parked = group.filter((c) => c.status === 'parked').length;
+    const active = group.length - waiting - parked;
+    if (waiting) wrap.appendChild(el('span', 'count waiting', waiting + ' waiting on you'));
+    if (active) wrap.appendChild(el('span', 'count', active + ' active'));
+    if (parked) wrap.appendChild(el('span', 'count parked', parked + ' parked'));
+    return wrap;
+  }
+
+  function plural(n, word) {
+    return n + ' ' + word + (n === 1 ? '' : 's');
+  }
+
+  async function groupAct(slugs, action, confirmMsg, doneMsg) {
+    if (!confirm(confirmMsg)) return;
+    try {
+      await post('/api/group-action', { slugs, action });
+      toast(doneMsg);
+      refresh(true);
+    } catch { toast('Could not send \\u2014 try again.'); }
+  }
+
+  function groupButton(label, cls, handler) {
+    const b = el('button', cls, label);
+    b.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handler();
+    };
+    return b;
+  }
+
+  function renderUmbrella(key, title, members, open) {
+    const details = el('details', 'umbrella');
+    details.dataset.key = 'u:' + key;
+    const summary = el('summary');
+    summary.appendChild(el('span', 'group-title', title));
+    summary.appendChild(countChips(members));
+    const actions = el('span', 'group-actions');
+    const notParked = members.filter((c) => c.status !== 'parked').map((c) => c.slug);
+    const parked = members.filter((c) => c.status === 'parked').map((c) => c.slug);
+    const all = members.map((c) => c.slug);
+    if (notParked.length) {
+      actions.appendChild(groupButton('Park all', 'mini', () => groupAct(
+        notParked, 'park',
+        'Park ' + plural(notParked.length, 'initiative') + ' under "' + title + '"?', 'Parked.')));
     }
     if (parked.length) {
-      const details = el('details', 'parked-section');
-      details.appendChild(el('summary', null, 'Parked (' + parked.length + ')'));
-      for (const c of parked) details.appendChild(renderCard(c));
-      root.appendChild(details);
+      actions.appendChild(groupButton('Re-engage all', 'mini', () => groupAct(
+        parked, 're-engage',
+        'Re-engage ' + plural(parked.length, 'initiative') + ' under "' + title + '"?', 'Re-engaging.')));
+    }
+    actions.appendChild(groupButton('Drop all', 'mini danger', () => groupAct(
+      all, 'drop',
+      'Drop all ' + plural(all.length, 'initiative') + ' under "' + title + '"? This asks for every one of them to be closed out.',
+      'Drop requested.')));
+    summary.appendChild(actions);
+    details.appendChild(summary);
+    for (const c of members) details.appendChild(renderCard(c));
+    applyOpen(details, open, members.some((c) => c.status === 'waiting-on-you'));
+    return details;
+  }
+
+  // Cards arrive from /api/cards already in need order (the documented
+  // ordering rule); areas and umbrella groups keep first-appearance order, so
+  // the neediest group is always on top without re-sorting here.
+  function render(cards) {
+    const state = saveDrafts();
+    const open = saveOpen();
+    const root = document.getElementById('board');
+    root.textContent = '';
+    if (!cards.length) {
+      root.appendChild(el('div', 'empty', 'No initiatives yet.'));
+      restoreDrafts(state);
+      return;
+    }
+    const areas = new Map();
+    for (const c of cards) {
+      const key = c.area || '';
+      if (!areas.has(key)) areas.set(key, []);
+      areas.get(key).push(c);
+    }
+    const waitingTotal = cards.filter((c) => c.status === 'waiting-on-you').length;
+    root.appendChild(el('div', 'board-summary',
+      plural(cards.length, 'initiative') + ' \\u00b7 ' + waitingTotal + ' waiting on you \\u00b7 ' + plural(areas.size, 'area')));
+    for (const [areaKey, areaCards] of areas) {
+      const section = el('details', 'area-section');
+      section.dataset.key = 'a:' + areaKey;
+      const summary = el('summary');
+      summary.appendChild(el('span', 'area-name', areaKey || 'General'));
+      summary.appendChild(countChips(areaCards));
+      section.appendChild(summary);
+      const umbrellas = new Set();
+      for (const c of areaCards) if (c.umbrella) umbrellas.add(c.umbrella);
+      // A card whose slug names an umbrella is that group's head card: it
+      // leads the group and lends it its title.
+      const groupOf = (c) => (c.umbrella && umbrellas.has(c.umbrella) ? c.umbrella
+        : umbrellas.has(c.slug) ? c.slug : '');
+      const renderedGroups = new Set();
+      for (const c of areaCards) {
+        const key = groupOf(c);
+        if (!key) {
+          section.appendChild(renderCard(c));
+          continue;
+        }
+        if (renderedGroups.has(key)) continue;
+        renderedGroups.add(key);
+        let members = areaCards.filter((m) => groupOf(m) === key);
+        const head = members.find((m) => m.slug === key);
+        if (head) members = [head, ...members.filter((m) => m !== head)];
+        section.appendChild(renderUmbrella(key, head ? head.title : key.replace(/-/g, ' '), members, open));
+      }
+      applyOpen(section, open, areaCards.some((c) => c.status === 'waiting-on-you'));
+      root.appendChild(section);
     }
     restoreDrafts(state);
   }
@@ -550,6 +701,42 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/cards') {
       const cards = listCards().map((c) => ({ ...c, links: cardLinks(c) }));
       sendJson(res, 200, { cards });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/group-action') {
+      const mediaType = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+      if (mediaType !== 'application/json') {
+        sendJson(res, 415, { error: 'content-type must be application/json' });
+        return;
+      }
+      let payload;
+      try {
+        payload = await readJsonBody(req);
+      } catch {
+        sendJson(res, 400, { error: 'invalid request body' });
+        return;
+      }
+      if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+        sendJson(res, 400, { error: 'invalid request body' });
+        return;
+      }
+      const action = typeof payload.action === 'string' ? payload.action : '';
+      if (!ACTIONS.has(action)) {
+        sendJson(res, 400, { error: 'invalid action' });
+        return;
+      }
+      // Membership is explicit at emission time: the client sends the exact
+      // member list it displayed in the confirmation, and every slug is
+      // validated before any event is written, so a bad entry rejects the
+      // whole batch instead of acting on part of it.
+      const slugs = Array.isArray(payload.slugs) ? payload.slugs : null;
+      if (!slugs || !slugs.length || slugs.length > MAX_GROUP_SLUGS
+        || !slugs.every((s) => typeof s === 'string' && SLUG_RE.test(s))) {
+        sendJson(res, 400, { error: 'invalid slugs' });
+        return;
+      }
+      for (const slug of new Set(slugs)) writeInboxEvent(action, slug, '');
+      sendJson(res, 200, { ok: true });
       return;
     }
     if (req.method === 'POST' && (url.pathname === '/api/message' || url.pathname === '/api/action')) {

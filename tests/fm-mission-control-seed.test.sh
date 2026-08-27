@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-mission-control-seed.sh: initiative stubs and
 # registry entries built from a compatible tasks-axi backlog listing, hold
-# mapping to waiting-on-you, idempotence, dry-run, and the manual-backend
-# refusal (docs/mission-control.md owns the schemas).
+# mapping to waiting-on-you, idempotence, dry-run, full titles taken from
+# `show --full` instead of the truncating listing, repo/priority/umbrella
+# mapping, the --fix-titles repair of earlier mangled seeds, and the
+# manual-backend refusal (docs/mission-control.md owns the schemas).
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -66,6 +68,72 @@ assert_contains "$out" "2 already present" "second run reports existing cards"
 [ "$before" = "$(cat "$INITIATIVES/fix-login-flakes.md")" ] || fail "re-run rewrote an existing card"
 [ "$(grep -c -- '- fix-login-flakes:' "$REGISTRY")" = 1 ] || fail "re-run duplicated a registry entry"
 pass "re-running the seed is safe"
+
+# --- full titles, area, priority, umbrella --------------------------------------
+
+# A title long enough that the tasks-axi listing truncates it with a literal
+# "... (truncated, N chars total ...)" marker; the seed must take the full
+# title from `tasks-axi show --full` instead (regression: seeded cards used to
+# carry the mangled listing cell).
+LONG_TITLE="Speed up the product search endpoint by moving the synonym expansion out of the request path and precomputing it at index time behind a feature flag"
+(
+  cd "$HOME_DIR" || exit 1
+  tasks-axi add web-slow-search "$LONG_TITLE" --repo acme-web > /dev/null
+  tasks-axi update web-slow-search --priority 1 > /dev/null
+  tasks-axi add codegen-study "Comparative codegen study" --repo tools > /dev/null
+  tasks-axi add codegen-study-decision-3 "Pick the winning codegen approach" --repo tools > /dev/null
+) || fail "grouping fixture backlog setup failed"
+
+out=$("$SEED")
+assert_contains "$out" "created 3 card(s)" "seed creates the new grouping fixtures"
+assert_grep "title: $LONG_TITLE" "$INITIATIVES/web-slow-search.md" "long title seeded complete"
+assert_no_grep "truncated," "$INITIATIVES/web-slow-search.md" "no listing truncation marker in the card"
+assert_grep "area: acme-web" "$INITIATIVES/web-slow-search.md" "backlog repo seeds the card area"
+assert_grep "priority: 1" "$INITIATIVES/web-slow-search.md" "backlog priority seeds the card priority"
+assert_grep "- web-slow-search: $LONG_TITLE" "$REGISTRY" "registry entry carries the full title"
+assert_grep "umbrella: codegen-study" "$INITIATIVES/codegen-study-decision-3.md" "decision-suffixed id seeds its umbrella"
+assert_no_grep "umbrella:" "$INITIATIVES/codegen-study.md" "the parent itself gets no umbrella"
+assert_no_grep "area:" "$INITIATIVES/fix-login-flakes.md" "an item without a repo gets no area line"
+pass "seed maps full titles, repo, priority, and decision umbrellas"
+
+# --- --fix-titles repairs earlier mangled seeds ----------------------------------
+
+(cd "$HOME_DIR" && tasks-axi add mangled-item "$LONG_TITLE" > /dev/null) \
+  || fail "mangled fixture backlog setup failed"
+MARKER='\n... (truncated, 160 chars total - use show mangled-item --full to see complete text)'
+cat > "$INITIATIVES/mangled-item.md" <<EOF
+---
+title: Speed up the product search endpoint by moving the synonym expansion out$MARKER
+status: active
+updated: 2026-08-26T12:00:00Z
+work-items: mangled-item
+---
+Queued; work has not started yet.
+
+## History
+- 2026-08-26T12:00:00Z: card seeded from the open backlog
+EOF
+printf -- '- mangled-item: Speed up the product search endpoint by moving the synonym expansion out%s\n' "$MARKER" >> "$REGISTRY"
+
+out=$("$SEED")
+assert_grep "truncated," "$INITIATIVES/mangled-item.md" "a plain re-seed leaves existing mangled cards alone"
+
+out=$("$SEED" --dry-run --fix-titles)
+assert_contains "$out" "would fix title: $INITIATIVES/mangled-item.md" "dry run previews the title fix"
+assert_grep "truncated," "$INITIATIVES/mangled-item.md" "dry run does not rewrite the card"
+
+out=$("$SEED" --fix-titles)
+assert_contains "$out" "1 title(s) fixed" "fix run reports the repair"
+assert_grep "title: $LONG_TITLE" "$INITIATIVES/mangled-item.md" "mangled card title repaired to the full title"
+assert_no_grep "truncated," "$INITIATIVES/mangled-item.md" "truncation marker removed from the card"
+assert_grep "- mangled-item: $LONG_TITLE" "$REGISTRY" "mangled registry entry repaired"
+assert_grep "status: active" "$INITIATIVES/mangled-item.md" "repair touches only the title line"
+assert_grep "updated: 2026-08-26T12:00:00Z" "$INITIATIVES/mangled-item.md" "repair does not bump the update timestamp"
+[ "$(grep -c -- '- mangled-item:' "$REGISTRY")" = 1 ] || fail "title fix duplicated a registry entry"
+
+out=$("$SEED" --fix-titles)
+assert_contains "$out" "0 title(s) fixed" "repair is idempotent"
+pass "--fix-titles repairs mangled seeded titles once"
 
 # --- manual backend refusal ---------------------------------------------------------
 

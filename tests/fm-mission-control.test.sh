@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Behavior tests for the Mission Control board (docs/mission-control.md):
 # server lifecycle via fm-mission-control.sh, card rendering from initiative
-# files, inbox event queueing, local doc rendering with the data/ containment
+# files, the documented need ordering of /api/cards (status, priority,
+# recency), area/umbrella/priority card fields, inbox event queueing including
+# batched group actions, local doc rendering with the data/ containment
 # boundary, the inbox poll script, and the registered watcher-check path
 # (shim registration, hash-validated snapshot execution, tamper refusal).
 set -u
@@ -66,9 +68,47 @@ updated: 2026-08-25T10:00:00Z
 Parked while the release settles.
 EOF
 
-# Closing --- as the last bytes of the file, no trailing newline.
-printf -- '---\ntitle: Stub card\nstatus: active\nupdated: 2026-08-26T12:00:00Z\n---' \
+# Closing --- as the last bytes of the file, no trailing newline; an
+# out-of-range priority must render as null, never as a sorting key.
+printf -- '---\ntitle: Stub card\nstatus: active\nupdated: 2026-08-26T12:00:00Z\npriority: 9\n---' \
   > "$INITIATIVES/stub-card.md"
+
+# Ordering and grouping fixtures (docs/mission-control.md "Ordering and
+# grouping"): a P0 active card older than its peers, and an umbrella with a
+# P0 waiting child that must outrank a fresher waiting card.
+cat > "$INITIATIVES/alpha-p0.md" <<'EOF'
+---
+title: Alpha outage follow-up
+status: active
+updated: 2026-08-24T09:00:00Z
+area: alpha
+priority: 0
+---
+Fix is being drafted.
+EOF
+
+cat > "$INITIATIVES/study.md" <<'EOF'
+---
+title: Comparative codegen study
+status: active
+updated: 2026-08-26T13:00:00Z
+area: tools
+---
+Report delivered; decisions pending.
+EOF
+
+cat > "$INITIATIVES/study-decision-1.md" <<'EOF'
+---
+title: Pick the winning codegen approach
+status: waiting-on-you
+updated: 2026-08-26T16:00:00Z
+area: tools
+umbrella: study
+priority: 0
+decision: Which codegen approach wins?
+---
+A decision is waiting on you.
+EOF
 
 # --- start the server on a free port -----------------------------------------
 
@@ -115,7 +155,28 @@ assert_contains "$cards" '"latest":"The fix is in review with checks passing."' 
 assert_contains "$cards" '"status":"parked"' "parked card rendered"
 assert_contains "$cards" '"title":"Stub card"' "frontmatter parsed when the closing --- has no trailing newline"
 assert_not_contains "$cards" 'title: Stub card' "raw frontmatter never leaks into a card body"
+assert_contains "$cards" '"area":"tools"' "card area rendered"
+assert_contains "$cards" '"umbrella":"study"' "card umbrella rendered"
 pass "GET /api/cards renders initiative files"
+
+# --- need ordering ---------------------------------------------------------------
+
+# Status rank, then priority (missing = 3), then recency, then slug: the P0
+# waiting child beats the fresher unprioritized waiting card, the P0 active
+# card beats fresher unprioritized actives, an out-of-range priority is
+# ignored, and parked sinks to the bottom.
+printf '%s' "$cards" | python3 -c '
+import json, sys
+
+cards = {c["slug"]: c for c in json.load(sys.stdin)["cards"]}
+order = list(cards)
+expected = ["study-decision-1", "fix-login-flakes", "alpha-p0", "study", "stub-card", "deploy-pipeline"]
+assert order == expected, f"order {order} != {expected}"
+assert cards["study-decision-1"]["priority"] == 0, "priority not rendered as a number"
+assert cards["stub-card"]["priority"] is None, "out-of-range priority not nulled"
+assert cards["fix-login-flakes"]["area"] == "", "missing area not empty"
+' || fail "/api/cards need ordering or field rendering is wrong"
+pass "GET /api/cards sorts by the documented need order"
 
 # --- local doc rendering and containment ---------------------------------------
 
@@ -154,6 +215,43 @@ act_file=$(find "$INBOX" -name '*-deploy-pipeline.msg' | head -1)
 [ -n "$act_file" ] || fail "action inbox file missing"
 assert_grep "kind: re-engage" "$act_file" "action event carries kind"
 pass "captain input lands as inbox event files"
+
+# --- group actions ----------------------------------------------------------------
+
+curl -sf -X POST "$BASE/api/group-action" -H 'content-type: application/json' \
+  -d '{"slugs":["study","study-decision-1"],"action":"park"}' > /dev/null \
+  || fail "group action post failed"
+for slug in study study-decision-1; do
+  f=$(find "$INBOX" -name "*-$slug.msg" | head -1)
+  [ -n "$f" ] || fail "group action wrote no event for $slug"
+  assert_grep "kind: park" "$f" "group action event for $slug carries the action kind"
+  assert_grep "slug: $slug" "$f" "group action event for $slug names the member"
+done
+pass "a group action lands one inbox event per named member"
+
+before=$(find "$INBOX" -name '*.msg' | wc -l | tr -d ' ')
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/group-action" \
+  -H 'content-type: application/json' -d '{"slugs":["study","../evil"],"action":"drop"}')
+[ "$code" = 400 ] || fail "group action with an invalid member accepted (got $code)"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/group-action" \
+  -H 'content-type: application/json' -d '{"slugs":[],"action":"drop"}')
+[ "$code" = 400 ] || fail "empty group action accepted (got $code)"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/group-action" \
+  -H 'content-type: application/json' -d '{"slugs":"study","action":"drop"}')
+[ "$code" = 400 ] || fail "non-array slugs accepted (got $code)"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/group-action" \
+  -H 'content-type: application/json' -d '{"slugs":["study"],"action":"delete-everything"}')
+[ "$code" = 400 ] || fail "invalid group action accepted (got $code)"
+oversize=$(python3 -c 'import json; print(json.dumps({"slugs": [f"slug-{i}" for i in range(201)], "action": "park"}))')
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/group-action" \
+  -H 'content-type: application/json' -d "$oversize")
+[ "$code" = 400 ] || fail "oversized group action accepted (got $code)"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/group-action" \
+  -H 'content-type: text/plain' -d '{"slugs":["study"],"action":"park"}')
+[ "$code" = 415 ] || fail "non-JSON group action content type accepted (got $code)"
+after=$(find "$INBOX" -name '*.msg' | wc -l | tr -d ' ')
+[ "$before" = "$after" ] || fail "rejected group actions still wrote inbox files"
+pass "invalid group actions are refused whole, with no partial writes"
 
 before=$(find "$INBOX" -name '*.msg' | wc -l | tr -d ' ')
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/message" \
