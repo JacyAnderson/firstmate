@@ -149,6 +149,8 @@ pass "board page renders"
 # per-card nor the group drop asks for confirmation, while group park and
 # re-engage keep theirs.
 assert_not_contains "$out" "closed out" "drop carries no confirmation prompt"
+assert_contains "$out" "drop.onclick = () => act(card.slug, 'drop'" "per-card drop is bound one-click"
+assert_contains "$out" "groupButton('Drop all', 'mini danger', () => groupAct(all, 'drop'" "group drop is bound one-click"
 assert_contains "$out" "confirm('Park " "group park still confirms"
 assert_contains "$out" "confirm('Re-engage " "group re-engage still confirms"
 pass "drop is one click on the board; group park and re-engage still confirm"
