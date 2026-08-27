@@ -426,11 +426,7 @@ const BOARD_JS = `
       controls.appendChild(park);
     }
     const drop = el('button', 'danger', 'Drop');
-    drop.onclick = () => {
-      if (confirm('Drop "' + card.title + '"? This asks for it to be closed out.')) {
-        act(card.slug, 'drop', 'Drop requested.');
-      }
-    };
+    drop.onclick = () => act(card.slug, 'drop', 'Drop requested.');
     controls.appendChild(drop);
     div.appendChild(controls);
     return div;
@@ -491,8 +487,7 @@ const BOARD_JS = `
     return n + ' ' + word + (n === 1 ? '' : 's');
   }
 
-  async function groupAct(slugs, action, confirmMsg, doneMsg) {
-    if (!confirm(confirmMsg)) return;
+  async function groupAct(slugs, action, doneMsg) {
     try {
       await post('/api/group-action', { slugs, action });
       toast(doneMsg);
@@ -521,19 +516,18 @@ const BOARD_JS = `
     const parked = members.filter((c) => c.status === 'parked').map((c) => c.slug);
     const all = members.map((c) => c.slug);
     if (notParked.length) {
-      actions.appendChild(groupButton('Park all', 'mini', () => groupAct(
-        notParked, 'park',
-        'Park ' + plural(notParked.length, 'initiative') + ' under "' + title + '"?', 'Parked.')));
+      actions.appendChild(groupButton('Park all', 'mini', () => {
+        if (!confirm('Park ' + plural(notParked.length, 'initiative') + ' under "' + title + '"?')) return;
+        groupAct(notParked, 'park', 'Parked.');
+      }));
     }
     if (parked.length) {
-      actions.appendChild(groupButton('Re-engage all', 'mini', () => groupAct(
-        parked, 're-engage',
-        'Re-engage ' + plural(parked.length, 'initiative') + ' under "' + title + '"?', 'Re-engaging.')));
+      actions.appendChild(groupButton('Re-engage all', 'mini', () => {
+        if (!confirm('Re-engage ' + plural(parked.length, 'initiative') + ' under "' + title + '"?')) return;
+        groupAct(parked, 're-engage', 'Re-engaging.');
+      }));
     }
-    actions.appendChild(groupButton('Drop all', 'mini danger', () => groupAct(
-      all, 'drop',
-      'Drop all ' + plural(all.length, 'initiative') + ' under "' + title + '"? This asks for every one of them to be closed out.',
-      'Drop requested.')));
+    actions.appendChild(groupButton('Drop all', 'mini danger', () => groupAct(all, 'drop', 'Drop requested.')));
     summary.appendChild(actions);
     details.appendChild(summary);
     for (const c of members) details.appendChild(renderCard(c));
@@ -726,7 +720,7 @@ const server = createServer(async (req, res) => {
         return;
       }
       // Membership is explicit at emission time: the client sends the exact
-      // member list it displayed in the confirmation, and every slug is
+      // member list it displayed when the button was clicked, and every slug is
       // validated before any event is written, so a bad entry rejects the
       // whole batch instead of acting on part of it.
       const slugs = Array.isArray(payload.slugs) ? payload.slugs : null;

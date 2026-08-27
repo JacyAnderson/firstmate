@@ -145,6 +145,14 @@ assert_contains "$out" "Mission Control" "board page serves"
 assert_contains "$out" "id=\"board\"" "board page carries the card container"
 pass "board page renders"
 
+# One-click drop (docs/mission-control.md "Server wire contract"): neither the
+# per-card nor the group drop asks for confirmation, while group park and
+# re-engage keep theirs.
+assert_not_contains "$out" "closed out" "drop carries no confirmation prompt"
+assert_contains "$out" "confirm('Park " "group park still confirms"
+assert_contains "$out" "confirm('Re-engage " "group re-engage still confirms"
+pass "drop is one click on the board; group park and re-engage still confirm"
+
 cards=$(curl -sf "$BASE/api/cards")
 assert_contains "$cards" '"title":"Fix the flaky login tests"' "card title rendered from initiative file"
 assert_contains "$cards" '"status":"waiting-on-you"' "card status rendered"
