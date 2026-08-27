@@ -25,12 +25,12 @@
 # and the other free-text fields come from `tasks-axi show <id> --full`, whose
 # values are complete and machine-quoted, never the listing's display-oriented
 # cells (which truncate and escape long text). The detail fetch runs only for
-# items that still need a card or registry entry, so re-runs stay cheap.
+# items that still need a card or registry entry, so re-runs stay cheap; an
+# item whose show fails is skipped with a warning, never seeded from blanks.
 #
 # --fix-titles additionally repairs existing cards and registry entries whose
 # title still carries the listing's literal truncation marker from earlier
-# seed versions, replacing only the title text; nothing else in the card is
-# touched.
+# seed versions, replacing only the title text and nothing else.
 #
 # Refuses (exit 1) when the backlog backend is manual, tasks-axi is missing,
 # incompatible, or its listing fails, or python3 (the parser) is absent.

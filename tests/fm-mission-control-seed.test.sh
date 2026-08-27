@@ -3,8 +3,9 @@
 # registry entries built from a compatible tasks-axi backlog listing, hold
 # mapping to waiting-on-you, idempotence, dry-run, full titles taken from
 # `show --full` instead of the truncating listing, repo/priority/umbrella
-# mapping, the --fix-titles repair of earlier mangled seeds, and the
-# manual-backend refusal (docs/mission-control.md owns the schemas).
+# mapping, the --fix-titles repair of earlier mangled seeds, the
+# manual-backend refusal, and loud per-item and listing failure handling
+# (docs/mission-control.md owns the schemas).
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -171,5 +172,86 @@ assert_contains "$out" "backlog corrupted" "listing failure carries the tool's e
 assert_not_contains "$out" "seed:" "no zero-card success summary after a listing failure"
 assert_absent "$FAIL_HOME/data/mission-control" "no cards or registry written after a listing failure"
 pass "a tasks-axi list failure stops the seed with its error"
+
+# --- per-item show failure skips loudly ----------------------------------------
+
+# A fake tasks-axi whose listing is fine but whose `show broken-item --full`
+# fails: the seed must skip that item with the tool's error on stderr - never
+# create a card or registry entry titled by the bare id from empty details -
+# while still seeding the healthy item (regression: a failed show used to
+# yield all-"-" fields silently).
+SHOWFAIL_HOME=$(fm_test_tmproot fm-mc-seed-showfail)
+mkdir -p "$SHOWFAIL_HOME"
+fakebin=$(fm_fakebin "$SHOWFAIL_HOME")
+cat > "$fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version|-v|-V) echo "tasks-axi 0.9.9"; exit 0 ;;
+  update) echo "usage: tasks-axi update ... --archive-body"; exit 0 ;;
+  mv) echo "usage: tasks-axi mv [<id>...]"; exit 0 ;;
+  list)
+    cat <<'OUT'
+count: 2
+tasks[2]{id,state,kind,repo,title}:
+  broken-item,queued,task,demo,Broken item
+  healthy-item,queued,task,demo,Healthy item
+OUT
+    exit 0 ;;
+  show)
+    if [ "${2:-}" = healthy-item ]; then
+      cat <<'OUT'
+task:
+  id: healthy-item
+  title: Healthy item full title
+  state: queued
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  repo: demo
+  priority: "-"
+OUT
+      exit 0
+    fi
+    echo "error: task store locked" >&2
+    exit 1 ;;
+esac
+exit 0
+SH
+chmod +x "$fakebin/tasks-axi"
+rc=0
+out=$(FM_HOME="$SHOWFAIL_HOME" PATH="$fakebin:$PATH" "$SEED" 2>&1) || rc=$?
+expect_code 0 "$rc" "seed with one failing tasks-axi show"
+assert_contains "$out" "skipping broken-item: tasks-axi show broken-item --full failed" "show failure is reported per item"
+assert_contains "$out" "task store locked" "show failure carries the tool's error"
+assert_contains "$out" "created 1 card(s)" "only the healthy item is counted as created"
+SHOWFAIL_CARDS="$SHOWFAIL_HOME/data/mission-control/initiatives"
+assert_absent "$SHOWFAIL_CARDS/broken-item.md" "no card seeded from a failed show"
+assert_present "$SHOWFAIL_CARDS/healthy-item.md" "healthy item still seeded"
+assert_grep "title: Healthy item full title" "$SHOWFAIL_CARDS/healthy-item.md" "healthy card carries its show title"
+assert_no_grep "- broken-item:" "$SHOWFAIL_HOME/data/mission-control/registry.md" "no registry entry from a failed show"
+
+# Under --fix-titles a failed show must leave an existing mangled card
+# untouched instead of overwriting its title with the bare id.
+cat > "$SHOWFAIL_CARDS/broken-item.md" <<EOF
+---
+title: Broken item mangled title$MARKER
+status: active
+updated: 2026-08-26T12:00:00Z
+work-items: broken-item
+---
+Queued; work has not started yet.
+EOF
+out=$(FM_HOME="$SHOWFAIL_HOME" PATH="$fakebin:$PATH" "$SEED" --fix-titles 2>&1) || rc=$?
+assert_contains "$out" "skipping broken-item" "fix run skips the failed show"
+assert_contains "$out" "0 title(s) fixed" "failed show is never counted as fixed"
+assert_grep "truncated," "$SHOWFAIL_CARDS/broken-item.md" "failed show leaves the mangled title untouched"
+pass "a tasks-axi show failure skips the item loudly"
+
+# --- help prints only the header comment -----------------------------------------
+
+out=$("$SEED" --help)
+assert_contains "$out" "Usage:" "help carries the usage block"
+assert_not_contains "$out" "set -u" "help stops at the header comment"
+pass "--help prints the header comment only"
 
 echo "ok - fm-mission-control-seed"
