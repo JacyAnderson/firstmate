@@ -441,8 +441,10 @@ const BOARD_JS = `
       await post('/api/action', { slug, action });
       toast(doneMsg);
       refresh(true);
-    } catch { toast('Could not send \\u2014 try again.'); }
-    finally { if (btn) btn.disabled = false; }
+    } catch {
+      toast('Could not send \\u2014 try again.');
+      if (btn) btn.disabled = false;
+    }
   }
 
   function saveDrafts() {
@@ -498,8 +500,10 @@ const BOARD_JS = `
       await post('/api/group-action', { slugs, action });
       toast(doneMsg);
       refresh(true);
-    } catch { toast('Could not send \\u2014 try again.'); }
-    finally { if (btn) btn.disabled = false; }
+    } catch {
+      toast('Could not send \\u2014 try again.');
+      if (btn) btn.disabled = false;
+    }
   }
 
   function groupButton(label, cls, handler) {
