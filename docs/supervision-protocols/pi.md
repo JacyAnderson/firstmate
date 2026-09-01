@@ -36,3 +36,4 @@ The isolated live test copied no credential material and created no account.
 The model called `fm_watch_arm_pi` exactly once, an actionable status closed that cycle, the extension ledger-linked a verified successor before the handling turn ended, the turn-end guard never fired, and `/quit` cleaned up both child processes.
 Command: `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh`.
 Observed output: `ok - Pi 0.80.10 live E2E used shared Codex auth, auto-started one successor before turn end, and cleaned up`.
+Both `/quit` cleanup observations above predate the external-kill survival contract ([`watcher-continuity.md`](../watcher-continuity.md) "External arm kills"): a confirmed watcher now deliberately outlives arm retirement, and the live E2E asserts the surviving watcher stops through its recorded lock pid instead.
