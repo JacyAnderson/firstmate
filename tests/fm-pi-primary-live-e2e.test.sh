@@ -308,7 +308,12 @@ arm_pid=$(ps -p "$watcher_pid" -o ppid= | tr -d ' ')
 sleep 1
 "$TMUX" -L "$SOCKET" send-keys -t "$SESSION" Enter
 wait_for_text "PI_EXIT=0" 60 || fail "Pi did not exit cleanly"
-wait_pid_dead "$watcher_pid" || fail "watcher child survived clean Pi exit"
 wait_pid_dead "$arm_pid" || fail "arm child survived clean Pi exit"
+# A CONFIRMED watcher deliberately outlives its arm (external-kill resilience;
+# docs/watcher-continuity.md "External arm kills"): quit retires the arm, and the
+# surviving watcher is stopped through its recorded lock pid, the home-scoped path.
+kill -0 "$watcher_pid" 2>/dev/null || fail "confirmed watcher did not survive arm retirement on quit"
+kill -TERM "$watcher_pid" 2>/dev/null || true
+wait_pid_dead "$watcher_pid" || fail "surviving watcher did not stop via its recorded pid"
 
 printf 'ok - Pi %s live E2E covered native Ahoy first/later messages, legacy transcripts, near misses, and watcher continuity\n' "$PI_VERSION"

@@ -169,6 +169,75 @@ test_guard_warnings() {
   pass "guard banner leads when down with pending wakes (repair-after-drain) and stays silent when fresh"
 }
 
+test_signal_provenance_log_fields_and_cap() {
+  # The shared provenance diary (fm_signal_provenance_log): one tab-separated
+  # line per signal with launch-time parent identity, current parent, process
+  # groups, and the child's state at trap time; dead children read as gone;
+  # parent commands cannot smuggle tabs into earlier fields; and the file stays
+  # size-capped.
+  local dir state live dead out i
+  dir=$(make_case provenance-unit)
+  state="$dir/state"
+  sleep 60 &
+  live=$!
+  dead=$(dead_pid)
+  out=$(FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_signal_provenance_capture
+    fm_signal_provenance_log "$2" test-script TERM confirmed "$3"
+    fm_signal_provenance_log "$2" test-script HUP unconfirmed "$4"
+  ' _ "$LIB" "$state" "$live" "$dead")
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  [ -z "$out" ] || fail "provenance logging produced unexpected stdout: $out"
+  grep -q "script=test-script	pid=[0-9][0-9]*	sig=TERM	phase=confirmed	pgid=[0-9][0-9]*	ppid_start=[0-9][0-9]*	ppid_now=[0-9][0-9]*	child=$live	child_stat=[A-Za-z+<]" "$state/.signal-provenance.log" \
+    || fail "live-child provenance line missing expected fields: $(cat "$state/.signal-provenance.log")"
+  grep -q "sig=HUP	phase=unconfirmed	.*child=$dead	child_stat=gone	child_pgid=gone" "$state/.signal-provenance.log" \
+    || fail "dead-child provenance line did not classify the child as gone"
+  awk -F '\t' 'NF != 12 { exit 1 }' "$state/.signal-provenance.log" \
+    || fail "a provenance line has a broken field count (parent_cmd cleaning failed?)"
+  # Cap: force a tiny budget and confirm the file shrinks to the keep window.
+  i=0
+  while [ "$i" -lt 30 ]; do
+    FM_STATE_OVERRIDE="$state" FM_SIGNAL_PROVENANCE_MAX_BYTES=600 FM_SIGNAL_PROVENANCE_KEEP_LINES=2 bash -c '
+      . "$1"
+      fm_signal_provenance_capture
+      fm_signal_provenance_log "$2" test-script TERM confirmed none
+    ' _ "$LIB" "$state" || fail "capped provenance append failed"
+    i=$((i + 1))
+  done
+  [ "$(wc -l < "$state/.signal-provenance.log" | tr -d '[:space:]')" -le 3 ] \
+    || fail "provenance log was not trimmed to its keep window"
+  pass "signal-provenance lines carry classified fields and the diary stays size-capped"
+}
+
+test_guard_warns_when_afk_daemon_dead() {
+  # Away-mode flag with no live daemon means the daemon's host task was stopped
+  # or reaped: the pull-based guard must warn loudly even with ZERO tasks in
+  # flight, and stay silent again once a live daemon holds its lock.
+  local dir state err live identity
+  dir=$(make_case guard-afk-dead)
+  state="$dir/state"
+  err="$dir/guard.err"
+  date '+%s' > "$state/.afk"
+  FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  grep -F 'AWAY MODE IS UNSUPERVISED' "$err" >/dev/null || fail "guard did not warn about a daemonless away mode"
+  grep -F '/afk' "$err" >/dev/null || fail "guard afk warning missing the restart guidance"
+
+  # Same home with a live identity-matched daemon lock: silent again.
+  sleep 60 &
+  live=$!
+  identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$live") || fail "could not identify fake daemon pid"
+  mkdir -p "$state/.supervise-daemon.lock"
+  printf '%s\n' "$live" > "$state/.supervise-daemon.lock/pid"
+  printf '%s\n' "$identity" > "$state/.supervise-daemon.lock/pid-identity"
+  FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  ! grep -F 'AWAY MODE IS UNSUPERVISED' "$err" >/dev/null || fail "guard warned despite a live away-mode daemon: $(cat "$err")"
+  pass "guard warns on a daemonless away mode and is silent with a live daemon"
+}
+
 test_lock_single_winner_under_concurrency() {
   local dir state lockdir marker i pids pid wins
   dir=$(make_case lock-concurrency)
@@ -444,8 +513,18 @@ test_watch_restart_attaches_to_healthy_peer() {
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
   mark_pr_check_migration_complete "$state"
-  node -e 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 300000)' &
+  # The peer must be provably TERM-resistant BEFORE the restart arm signals it:
+  # a TERM that lands during node startup, before the handler registers, kills
+  # the peer and turns this into a plain dead-lock takeover. Node prints the
+  # ready marker only after registration, so waiting on it closes that race.
+  node -e 'process.on("SIGTERM", () => {}); console.log("peer-ready"); setTimeout(() => {}, 300000)' > "$dir/peer.out" &
   peer=$!
+  i=0
+  while [ "$i" -lt 80 ] && ! grep -qF 'peer-ready' "$dir/peer.out" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'peer-ready' "$dir/peer.out" || fail "TERM-resistant peer did not report readiness"
   identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
   mkdir "$state/.watch.lock"
   printf '%s\n' "$peer" > "$state/.watch.lock/pid"
@@ -656,12 +735,32 @@ test_arm_starts_and_self_heals() {
   pass "arm starts+confirms a fresh watcher on a clean lock and self-heals a dead-pid lock (never healthy off a dead pid)"
 }
 
-test_arm_hup_cleans_child_and_temp_output() {
-  local dir state fakebin armout i armpid lock_pid status
-  dir=$(make_case arm-hup-cleanup)
+# Stop a watcher that outlived its arm (the confirmed-survival contract): TERM
+# the recorded lock pid directly and wait for it to exit and release the lock.
+stop_detached_watcher() {
+  local state=$1 wpid i=0
+  wpid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  case "$wpid" in ''|*[!0-9]*) return 0 ;; esac
+  kill -TERM "$wpid" 2>/dev/null || true
+  while [ "$i" -lt 100 ] && is_live_non_zombie "$wpid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 0
+}
+
+test_confirmed_arm_signal_detaches_watcher_and_cleans_temp() {
+  # The external-kill resilience contract: once the arm has CONFIRMED its
+  # watcher, a signal to the arm must not tear the watcher down. The arm exits
+  # with the signal status, removes its temp output, records the detached
+  # successor in the cycle ledger, and appends a signal-provenance line. A fresh
+  # arm must then ATTACH to the surviving watcher.
+  local dir state fakebin armout arm2out i armpid arm2pid lock_pid status
+  dir=$(make_case arm-confirmed-signal-detach)
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
+  arm2out="$dir/arm2.out"
   PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
   armpid=$!
   i=0
@@ -670,20 +769,115 @@ test_arm_hup_cleans_child_and_temp_output() {
     sleep 0.1
     i=$((i + 1))
   done
-  grep -qF 'watcher: started pid=' "$armout" || fail "arm did not start before HUP cleanup check"
+  grep -qF 'watcher: started pid=' "$armout" || fail "arm did not start before confirmed-signal check"
   lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
-  kill -HUP "$armpid" 2>/dev/null || fail "could not send HUP to arm"
+  kill -TERM "$armpid" 2>/dev/null || fail "could not send TERM to arm"
   wait_for_exit "$armpid" 80
   status=$?
-  [ "$status" -eq 129 ] || fail "arm did not exit with HUP status (got $status)"
+  [ "$status" -eq 143 ] || fail "confirmed arm did not exit with TERM status (got $status)"
+  is_live_non_zombie "$lock_pid" || fail "signaling a confirmed arm killed its watcher"
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$lock_pid" ] || fail "watcher lost its lock after arm signal"
+  ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 || fail "confirmed-signal exit left temp output behind"
+  grep -q "arm_pid=$armpid.*origin=started.*exit_code=143.*signal=TERM.*reason=arm-interrupted.*successor=detached:$lock_pid" "$state/.watch-cycle-exits.log" \
+    || fail "confirmed arm interruption did not record the detached watcher in the ledger"
+  grep -q "script=fm-watch-arm.*sig=TERM.*phase=confirmed.*child=$lock_pid" "$state/.signal-provenance.log" \
+    || fail "confirmed arm interruption did not append a signal-provenance line"
+  # A fresh arm attaches to the surviving watcher instead of starting a second one.
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_ARM_ATTACH_POLL=0.1 FM_ARM_CONFIRM_TIMEOUT=1 "$WATCH_ARM" > "$arm2out" &
+  arm2pid=$!
   i=0
-  while [ "$i" -lt 80 ] && is_live_non_zombie "$lock_pid"; do
+  while [ "$i" -lt 80 ]; do
+    grep -qF "watcher: attached pid=$lock_pid" "$arm2out" 2>/dev/null && break
     sleep 0.1
     i=$((i + 1))
   done
-  ! is_live_non_zombie "$lock_pid" || fail "HUP cleanup left watcher child running"
-  ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 || fail "HUP cleanup left temp output behind"
-  pass "arm cleans child watcher and temp output on HUP"
+  grep -qF "watcher: attached pid=$lock_pid" "$arm2out" || fail "fresh arm did not attach to the surviving watcher: $(cat "$arm2out")"
+  ! grep -qF 'watcher: started' "$arm2out" || fail "fresh arm started a second watcher behind the survivor"
+  kill -HUP "$arm2pid" 2>/dev/null || true
+  wait "$arm2pid" 2>/dev/null || true
+  stop_detached_watcher "$state"
+  pass "confirmed arm signal detaches the watcher, records ledger+provenance, and the next arm attaches"
+}
+
+test_group_term_of_arm_tree_spares_watcher() {
+  # The observed harness reap SIGTERMs the arm task's whole process group. The
+  # watcher runs in its own group (set -m fork), so a group-targeted kill of the
+  # arm tree must leave it supervising.
+  local dir state fakebin armout pidfile i armpid lock_pid
+  dir=$(make_case arm-group-term)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  armout="$dir/arm.out"
+  pidfile="$dir/arm.pid"
+  mark_pr_check_migration_complete "$state"
+  # Make the arm a process-group leader, the shape a harness background task has.
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    bash -c 'set -m; "$1" > "$2" 2>&1 & printf "%s\n" "$!" > "$3"; set +m; wait' _ "$WATCH_ARM" "$armout" "$pidfile" &
+  i=0
+  while [ "$i" -lt 80 ]; do
+    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  grep -qF 'watcher: started pid=' "$armout" || fail "group-term arm did not start a watcher"
+  armpid=$(cat "$pidfile" 2>/dev/null || true)
+  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+  [ -n "$armpid" ] && [ -n "$lock_pid" ] || fail "group-term fixture missing arm or watcher pid"
+  kill -TERM -"$armpid" 2>/dev/null || fail "could not TERM the arm's process group"
+  i=0
+  while [ "$i" -lt 80 ] && is_live_non_zombie "$armpid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! is_live_non_zombie "$armpid" || fail "arm survived its own group TERM"
+  is_live_non_zombie "$lock_pid" || fail "group TERM of the arm tree killed the watcher"
+  grep -q "arm_pid=$armpid.*reason=arm-interrupted.*successor=detached:$lock_pid" "$state/.watch-cycle-exits.log" \
+    || fail "group-term interruption was not recorded with a detached successor"
+  stop_detached_watcher "$state"
+  pass "group TERM of the arm's own process group spares the watcher"
+}
+
+test_unconfirmed_arm_signal_still_kills_child() {
+  # Before confirmation the old contract holds: a signaled arm tears its
+  # unconfirmed child down (the Pi/OpenCode bounded unready-arm retirement
+  # depends on this). Use a private bin copy whose fm-watch.sh never takes the
+  # lock, so the arm stays in its confirmation window indefinitely.
+  local dir state bindir armout i armpid child_pid status
+  dir=$(make_case arm-unconfirmed-signal)
+  state="$dir/state"
+  bindir="$dir/bin"
+  armout="$dir/arm.out"
+  mkdir -p "$bindir"
+  cp "$WATCH_ARM" "$bindir/fm-watch-arm.sh"
+  cp "$ROOT/bin/fm-wake-lib.sh" "$bindir/fm-wake-lib.sh"
+  cat > "$bindir/fm-watch.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$$" > "${FM_STATE_OVERRIDE:?}/fake-watch.pid"
+sleep 300
+SH
+  chmod +x "$bindir/fm-watch-arm.sh" "$bindir/fm-watch.sh"
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_ARM_CONFIRM_TIMEOUT=30 "$bindir/fm-watch-arm.sh" > "$armout" &
+  armpid=$!
+  i=0
+  while [ "$i" -lt 80 ] && [ ! -s "$state/fake-watch.pid" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$state/fake-watch.pid" ] || fail "unconfirmed child watcher did not launch"
+  child_pid=$(cat "$state/fake-watch.pid")
+  kill -TERM "$armpid" 2>/dev/null || fail "could not TERM the unconfirmed arm"
+  wait_for_exit "$armpid" 80
+  status=$?
+  [ "$status" -eq 143 ] || fail "unconfirmed arm did not exit with TERM status (got $status)"
+  i=0
+  while [ "$i" -lt 80 ] && is_live_non_zombie "$child_pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! is_live_non_zombie "$child_pid" || fail "unconfirmed arm signal left its child running"
+  grep -q "script=fm-watch-arm.*sig=TERM.*phase=unconfirmed" "$state/.signal-provenance.log" \
+    || fail "unconfirmed interruption did not append a provenance line"
+  pass "unconfirmed arm signal still tears its child down (adapter retirement preserved)"
 }
 
 test_arm_propagates_immediate_wake_before_confirmation() {
@@ -831,6 +1025,9 @@ SH
     || fail "predecessor ledger record was not linked to its verified successor"
   kill -HUP "$successor_arm" 2>/dev/null || true
   wait "$successor_arm" 2>/dev/null || true
+  # A confirmed arm's HUP detaches its watcher instead of killing it; stop the
+  # survivor so the next bounded cycle starts fresh instead of attaching.
+  stop_detached_watcher "$state"
 
   # Produce enough short cycles to cross a deliberately small cap. The cap is
   # applied by the arm layer itself and keeps only complete ledger records.
@@ -848,6 +1045,7 @@ SH
     grep -qF 'watcher: started pid=' "$armout" || fail "bounded ledger cycle $iteration did not start"
     kill -HUP "$successor_arm" 2>/dev/null || true
     wait "$successor_arm" 2>/dev/null || true
+    stop_detached_watcher "$state"
     iteration=$((iteration + 1))
   done
   size=$(wc -c < "$state/.watch-cycle-exits.log" | tr -d '[:space:]')
@@ -962,6 +1160,8 @@ test_linux_pid_identity_ignores_wall_clock_and_detects_pid_reuse
 test_stale_watch_lock_reclaimed
 test_live_stale_watch_lock_is_actionable
 test_guard_warnings
+test_signal_provenance_log_fields_and_cap
+test_guard_warns_when_afk_daemon_dead
 test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
 test_lock_stale_steal_single_winner_under_concurrency
@@ -977,7 +1177,9 @@ test_arm_self_eviction_is_loud_without_successor
 test_arm_attaches_and_waits_for_live_fresh_watcher
 test_attached_arm_signal_is_recorded_in_cycle_ledger
 test_arm_starts_and_self_heals
-test_arm_hup_cleans_child_and_temp_output
+test_confirmed_arm_signal_detaches_watcher_and_cleans_temp
+test_group_term_of_arm_tree_spares_watcher
+test_unconfirmed_arm_signal_still_kills_child
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable

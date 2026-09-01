@@ -1390,9 +1390,16 @@ fm_super_main() {
   migrate_watcher_pause_markers "$STATE"
 
   # --- shutdown: flush buffered escalations, reap child, release lock -------
+  # Capture parent identity while it is alive: an external kill of this host
+  # task (e.g. a harness reaping its tracked background tasks) usually orphans
+  # the daemon before cleanup can look, and the provenance line below is the
+  # durable evidence of who died in what order.
+  fm_signal_provenance_capture
   local WATCHER_PID="" CUR_TMP=""
   cleanup() {
+    local signal=${1:-unknown}
     trap - TERM INT
+    fm_signal_provenance_log "$STATE" fm-supervise-daemon "$signal" afk-daemon "${WATCHER_PID:-none}"
     wedge_alarm_stop_active_notifier
     escalate_flush "$STATE" 2>/dev/null || true
     if [ -n "${WATCHER_PID:-}" ]; then
@@ -1407,7 +1414,8 @@ fm_super_main() {
     log "daemon shutting down"
     exit 0
   }
-  trap cleanup TERM INT
+  trap 'cleanup TERM' TERM
+  trap 'cleanup INT' INT
 
   # --- crash-loop guard -----------------------------------------------------
   local crash_times=() backoff_secs=$CRASH_NORMAL_SLEEP

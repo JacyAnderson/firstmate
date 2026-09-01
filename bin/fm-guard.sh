@@ -140,6 +140,34 @@ if [ -n "$tangle_branch" ]; then
   } >&2
 fi
 
+# Away-mode daemon liveness, checked independently of in-flight tasks: while
+# state/.afk exists the sub-supervisor daemon owns supervision, so a
+# flagged-but-daemonless home (e.g. the harness reaped the daemon's host task)
+# is unsupervised even with an empty fleet. Warn loudly on every guarded
+# command; bin/fm-turnend-guard.sh carries the matching push-based alarm.
+if [ -e "$STATE/.afk" ]; then
+  # fm-afk-start.sh owns the daemon-lock liveness helpers; sourcing it enables
+  # errexit, which this warn-only guard must not keep.
+  # shellcheck source=bin/fm-afk-start.sh
+  . "$SCRIPT_DIR/fm-afk-start.sh"
+  set +e
+  if ! daemon_lock_held_by_live_daemon; then
+    arule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+    {
+      printf '●%s\n' "$arule"
+      printf '●  AWAY MODE IS UNSUPERVISED - DAEMON IS NOT RUNNING\n'
+      printf '●  state/.afk is set but no live away-mode daemon holds its lock; its host task was likely stopped or reaped.\n'
+      if [ "$READ_ONLY" -eq 1 ]; then
+        printf '●  This read-only session should report the lapse, not repair it.\n'
+      else
+        printf '●  Load the /afk skill and restart the away-mode daemon, or run the /afk return owner if the captain is back.\n'
+      fi
+      printf '●  %s\n' "$CONTINUE_LINE"
+      printf '●%s\n' "$arule"
+    } >&2
+  fi
+fi
+
 # Compute in-flight count and watcher-beacon freshness via the shared
 # grace-based predicate (bin/fm-supervision-lib.sh). Only act with tasks in
 # flight; count them so the banner can say how much is riding on an absent

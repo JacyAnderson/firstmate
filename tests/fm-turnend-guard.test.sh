@@ -94,6 +94,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-afk-start.sh" "$dir/bin/fm-afk-start.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
   chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
@@ -331,6 +332,45 @@ test_hook_uses_state_override() {
   expect_code 2 "$status" "hook must let FM_STATE_OVERRIDE win over FM_HOME/state"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   pass "fm-turnend-guard: uses FM_STATE_OVERRIDE ahead of FM_HOME/state"
+}
+
+test_hook_blocks_when_afk_flag_has_no_daemon() {
+  # state/.afk with no live daemon lock means away mode is flagged but
+  # unsupervised (e.g. the harness reaped the daemon's host task). The guard
+  # must block even with ZERO tasks in flight, and the loop guard must still
+  # allow the retried stop.
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-no-daemon")
+  date '+%s' > "$dir/state/.afk"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "hook must block when .afk is set with no live daemon"
+  assert_contains "$out" "AWAY MODE IS UNSUPERVISED" "block reason must name the unsupervised away mode"
+  assert_contains "$out" "/afk" "block reason must point at the /afk restart owner"
+  out=$(run_hook "$dir" true); status=$?
+  expect_code 0 "$status" "loop guard must allow the retried stop despite the dead daemon"
+  pass "fm-turnend-guard: blocks a daemonless away mode even with nothing in flight"
+}
+
+test_hook_silent_when_afk_daemon_alive() {
+  local dir pid identity out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-afk-live-daemon")
+  date '+%s' > "$dir/state/.afk"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify fake daemon holder"
+  }
+  mkdir -p "$dir/state/.supervise-daemon.lock"
+  printf '%s\n' "$pid" > "$dir/state/.supervise-daemon.lock/pid"
+  printf '%s\n' "$identity" > "$dir/state/.supervise-daemon.lock/pid-identity"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "hook must exit 0 with a live away-mode daemon and nothing in flight"
+  [ -z "$out" ] || fail "hook produced output despite a live away-mode daemon: $out"
+  pass "fm-turnend-guard: silent no-op while a live daemon owns away mode"
 }
 
 test_hook_loop_guard_allows_retry() {
@@ -928,6 +968,8 @@ test_hook_blocks_from_fm_home_state
 test_hook_x_mode_reason_sources_cadence
 test_hook_ignores_repo_state_when_fm_home_set
 test_hook_uses_state_override
+test_hook_blocks_when_afk_flag_has_no_daemon
+test_hook_silent_when_afk_daemon_alive
 test_hook_loop_guard_allows_retry
 test_hook_blocks_in_secondmate_own_home
 test_hook_silent_in_idle_secondmate_home
