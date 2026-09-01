@@ -43,6 +43,39 @@ The file is size-capped through `FM_WATCH_CYCLE_LOG_MAX_BYTES` and `FM_WATCH_CYC
 The default 300-second grace is unchanged.
 Only the watcher process touches `state/.last-watcher-beat`; no helper process can make a wedged watcher appear healthy.
 
+## External arm kills
+
+A CONFIRMED watcher's lifecycle belongs to the home singleton lock, not to the arm process that started it.
+The arm forks the watcher into its own process group, so a group-targeted kill of the arm's task tree cannot reach it.
+Once the arm has printed `watcher: started`, a TERM/HUP/INT to the arm exits the arm with the signal status, records the interrupted cycle with `successor=detached:<pid>`, and leaves the watcher supervising; the next arm invocation attaches to it through the ordinary healthy-watcher path, so no wake is lost between the kill and the re-arm.
+Before confirmation the old teardown contract holds: a signaled arm still stops its unconfirmed child, which is what the Pi/OpenCode adapters' bounded unready-arm retirement relies on.
+A detached watcher is bounded - it exits at its next actionable wake, which is durably queued either way - and `--restart` still stops exactly this home's watcher through the recorded lock pid.
+The arm never relaunches anything from inside its own signal handler.
+
+Every TERM/HUP/INT received by the arm, and by the away-mode daemon's shutdown handler, also appends one line to the size-capped `state/.signal-provenance.log` (`fm_signal_provenance_log` in `bin/fm-wake-lib.sh`).
+Each line records the launch-time parent pid and command, the current parent pid, the process group ids, and the child's state at trap time, which together distinguish a single-pid TERM from a group- or tree-targeted kill.
+
+While `state/.afk` exists with no live daemon holding `state/.supervise-daemon.lock`, away mode is flagged but unsupervised - the state an external kill of the daemon's host task leaves behind.
+`bin/fm-turnend-guard.sh` blocks the next turn end for it (even with zero tasks in flight) and `bin/fm-guard.sh` warns on every guarded command, both pointing at the `/afk` restart owner.
+
+### Evidence, 2026-08-31
+
+Kills of harness-hosted supervision tasks were reproduced and attributed on Claude Code (Darwin 25.6.0).
+A probe with the arm's process shape (parent traps TERM; child bash sleeps with its own TERM trap) was run as a tracked background Bash task and stopped through the harness:
+
+```text
+parent: pid=41493 pgid=41491 ppid=41491 pcmd=[/bin/zsh -c ...]
+child:  pid=41499 pgid=41491
+child: got TERM, exiting clean
+parent trap: sig=TERM child_stat=[Z] ppid_now=1
+```
+
+The child received TERM directly and was already a zombie when the parent's trap ran, and the parent was orphaned to pid 1: the harness signals the whole process group, so no in-arm handler choice could previously save a same-group watcher.
+Upstream, unexpected SIGTERM kills of long-lived `run_in_background` tasks are known Claude Code defects, not a documented or configurable lifetime cap: anthropics/claude-code#87496 (kills ~30-90s after the owning turn ends) and #87948 (kills seconds after the arming turn ends), with #90616 showing a killed background task can even be reported to the model as completed.
+
+With the survival contract in place, a group TERM of the arm's own process tree left the watcher supervising with the lock intact, a fresh arm reported `watcher: attached`, and a subsequent status write still produced the queued wake and the attached arm's typed close.
+Regression coverage: `test_confirmed_arm_signal_detaches_watcher_and_cleans_temp`, `test_group_term_of_arm_tree_spares_watcher`, and `test_unconfirmed_arm_signal_still_kills_child` in `tests/fm-watcher-lock.test.sh`.
+
 ## Regression coverage
 
 `tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
@@ -82,6 +115,7 @@ Observed result: `ok - OpenCode 1.17.18 live E2E auto-started one successor befo
 
 Pi loaded the tracked extensions in its interactive TUI, called `fm_watch_arm_pi` once, received an actionable close, and ledger-linked a successor before the handling turn ended.
 The turn-end backstop did not fire, and `/quit` removed both the watcher and arm child.
+That quit observation predates the external-kill survival contract above: a confirmed watcher now outlives arm retirement, and `tests/fm-pi-primary-live-e2e.test.sh` asserts the surviving watcher stops through its recorded lock pid instead.
 Command: `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh`.
 Observed result: `ok - Pi 0.80.10 live E2E used shared Codex auth, auto-started one successor before turn end, and cleaned up`.
 

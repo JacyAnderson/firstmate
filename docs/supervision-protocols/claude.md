@@ -12,10 +12,12 @@ When this session owns supervision and away mode is not active:
 7. Failure or missing cycle only: treat any `watcher: FAILED ...` result as an alarm and repair it before ending the turn.
 8. Ordinary wake: when the background task completes with `signal:`, `stale:`, `check:`, or `heartbeat`, drain queued wakes, then start exactly one fresh background task before running other fleet commands to handle the wake.
    Do not invent a wake from an attach-status line alone; drain and act only on real wake records or a real watcher reason line.
-9. The continuity PreToolUse gate allows wake drain, watcher arm recovery, and fail-closed teardown, and refuses only other `bin/fm-*.sh` fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
-10. The existing turn-end guard remains unchanged as the final backstop and is not replaced by this command gate.
-11. Recovery only: if a forced restart is genuinely needed, run `bin/fm-watch-arm.sh --restart` through the same Claude background task mechanism.
-12. Do not send idle progress while the watcher is parked.
+9. Killed arm task: when the arm background task ends with no wake line and no `watcher: FAILED` line (typically exit 143 - Claude Code is known to reap tracked background tasks), the confirmed watcher deliberately survives in its own process group.
+   Drain queued wakes, then start one fresh arm background task; it attaches to the surviving watcher, and `state/.signal-provenance.log` records the kill.
+10. The continuity PreToolUse gate allows wake drain, watcher arm recovery, and fail-closed teardown, and refuses only other `bin/fm-*.sh` fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
+11. The existing turn-end guard remains unchanged as the final backstop and is not replaced by this command gate.
+12. Recovery only: if a forced restart is genuinely needed, run `bin/fm-watch-arm.sh --restart` through the same Claude background task mechanism.
+13. Do not send idle progress while the watcher is parked.
 
 Claude Code's background task completion is the wake mechanism.
 The watcher itself remains `bin/fm-watch.sh`, and `bin/fm-watch-arm.sh` is only the verified background arm wrapper.

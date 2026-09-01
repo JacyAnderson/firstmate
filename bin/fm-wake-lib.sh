@@ -371,6 +371,63 @@ fm_wake_clean_field() {
   LC_ALL=C tr '\t\r\n' '   '
 }
 
+# Signal-provenance diary for long-lived supervision hosts (the watcher arm and
+# the away-mode daemon). One line per received TERM/HUP/INT, appended by the
+# host's own signal handler so an external kill leaves evidence of WHO died in
+# WHAT order. Interpretation:
+#   ppid_now=1 (or gone) while ppid_start named a live shell  -> the parent
+#     shell was killed with us: a process-tree or process-group kill.
+#   child_stat=Z or gone at trap time                          -> the child was
+#     signaled directly too (group-targeted kill), not by this handler.
+#   child alive at trap time                                   -> only this
+#     process was signaled (a single-pid TERM, e.g. an adapter retirement).
+# Best-effort and size-capped like the watcher triage log: a diagnostics
+# failure never affects the handler's real work.
+FM_SIGNAL_PROVENANCE_MAX_BYTES=${FM_SIGNAL_PROVENANCE_MAX_BYTES:-131072}
+FM_SIGNAL_PROVENANCE_KEEP_LINES=${FM_SIGNAL_PROVENANCE_KEEP_LINES:-500}
+
+# Capture launch-time parent identity while the parent is still alive; at
+# signal time it is often already gone (orphaned to pid 1).
+fm_signal_provenance_capture() {
+  FM_PROV_PPID=${PPID:-unknown}
+  FM_PROV_PCMD=$(ps -o command= -p "$PPID" 2>/dev/null | head -1 | cut -c1-256)
+  [ -n "$FM_PROV_PCMD" ] || FM_PROV_PCMD=unknown
+  FM_PROV_PGID=$(ps -o pgid= -p "${BASHPID:-$$}" 2>/dev/null | tr -d '[:space:]')
+  [ -n "$FM_PROV_PGID" ] || FM_PROV_PGID=unknown
+}
+
+fm_signal_provenance_log() {  # <state-dir> <script-label> <signal> <phase> [child-pid]
+  local state=$1 label=$2 sig=$3 phase=$4 child=${5:-none}
+  local log="$state/.signal-provenance.log" ppid_now child_stat=none child_pgid=none ps_out sz
+  ppid_now=$(ps -o ppid= -p "${BASHPID:-$$}" 2>/dev/null | tr -d '[:space:]')
+  [ -n "$ppid_now" ] || ppid_now=unknown
+  case "$child" in
+    ''|none) child=none ;;
+    *)
+      ps_out=$(ps -o stat= -o pgid= -p "$child" 2>/dev/null | head -1)
+      if [ -n "$ps_out" ]; then
+        child_stat=$(printf '%s' "$ps_out" | awk '{print $1}')
+        child_pgid=$(printf '%s' "$ps_out" | awk '{print $2}')
+      else
+        child_stat=gone
+        child_pgid=gone
+      fi
+      ;;
+  esac
+  printf 'ts=%s\tscript=%s\tpid=%s\tsig=%s\tphase=%s\tpgid=%s\tppid_start=%s\tppid_now=%s\tchild=%s\tchild_stat=%s\tchild_pgid=%s\tparent_cmd=%s\n' \
+    "$(date +%s)" "$label" "${BASHPID:-$$}" "$sig" "$phase" \
+    "${FM_PROV_PGID:-unknown}" "${FM_PROV_PPID:-unknown}" "$ppid_now" \
+    "$child" "$child_stat" "$child_pgid" \
+    "$(printf '%s' "${FM_PROV_PCMD:-unknown}" | fm_wake_clean_field)" >> "$log" 2>/dev/null || return 0
+  sz=$(wc -c < "$log" 2>/dev/null | tr -d '[:space:]')
+  case "$sz" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$sz" -ge "$FM_SIGNAL_PROVENANCE_MAX_BYTES" ]; then
+    tail -n "$FM_SIGNAL_PROVENANCE_KEEP_LINES" "$log" > "$log.tmp" 2>/dev/null && mv -f "$log.tmp" "$log" 2>/dev/null
+    rm -f "$log.tmp" 2>/dev/null || true
+  fi
+  return 0
+}
+
 fm_wake_append() {
   local kind=$1 key=$2 payload=$3 clean_key clean_payload epoch seq seq_file status
   case "$kind" in

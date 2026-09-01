@@ -77,6 +77,32 @@ STOP_HOOK_ACTIVE=$(printf '%s' "$PAYLOAD" | jq -r '.stop_hook_active // false' 2
 # so this exempts them while guarding every real secondmate home.
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
+# --- away-mode daemon liveness ------------------------------------------------
+# While state/.afk exists the sub-supervisor daemon owns supervision (AGENTS.md
+# section 8), so a flagged-but-daemonless home is unsupervised even with ZERO
+# tasks in flight: nothing classifies wakes, nothing injects escalations, and no
+# later turn ever notices on its own. That exact state is what a harness reaping
+# the daemon's tracked background host task leaves behind. Alarm before the
+# in-flight gate below so the reaped daemon is surfaced on the very next turn.
+if [ -e "$STATE/.afk" ]; then
+  # fm-afk-start.sh is the owner of the daemon-lock liveness helpers; sourcing
+  # it enables errexit, which this fail-open guard must not keep.
+  # shellcheck source=bin/fm-afk-start.sh
+  . "$SCRIPT_DIR/fm-afk-start.sh"
+  set +e
+  if ! daemon_lock_held_by_live_daemon; then
+    rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+    {
+      printf '●%s\n' "$rule"
+      printf '●  AWAY MODE IS UNSUPERVISED - DAEMON IS NOT RUNNING\n'
+      printf '●  state/.afk is set but no live away-mode daemon holds its lock; its host task was likely stopped or reaped.\n'
+      printf '●  Load the /afk skill and restart the away-mode daemon, or run the /afk return owner if the captain is back.\n'
+      printf '●%s\n' "$rule"
+    } >&2
+    exit 2
+  fi
+fi
+
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"

@@ -44,7 +44,32 @@
 # arm/watcher identities, timestamps, exit/signal classification, beacon age,
 # lock identity before and after close, and successor disposition. The separate
 # state/.watch-triage.log remains exclusively the watcher's absorbed-wake debug
-# log and is never written here.
+# log and is never written here. Every TERM/HUP/INT this arm receives also
+# appends one signal-provenance line to state/.signal-provenance.log
+# (fm_signal_provenance_log in bin/fm-wake-lib.sh) so an external reaper - e.g.
+# a harness killing its tracked background tasks - leaves evidence of who died
+# in what order.
+#
+# EXTERNAL-KILL RESILIENCE. Harnesses that host this arm as a tracked background
+# task have been observed SIGTERM-killing the task's whole process group without
+# operator intent (Claude Code background-task cleanup; see
+# docs/watcher-continuity.md "External arm kills"). The watcher must therefore
+# not share the arm's fate:
+#   - The watcher child is forked into its OWN process group (set -m), so a
+#     group-targeted kill of the arm's task tree never reaches it.
+#   - Once the child is CONFIRMED (the "watcher: started" line printed), its
+#     lifecycle belongs to the home singleton lock, not to this arm process: a
+#     TERM/HUP/INT to a confirmed arm logs provenance and exits WITHOUT killing
+#     the watcher, and the interrupted cycle records successor=detached:<pid>.
+#     The next arm invocation then ATTACHES to the surviving watcher (the
+#     healthy-watcher path below), so no wake is lost between kill and re-arm.
+#   - Before confirmation the old contract holds: a signaled arm still tears its
+#     unconfirmed child down, which is what the Pi/OpenCode adapters' bounded
+#     unready-arm retirement relies on.
+# A detached watcher is bounded: it exits at its next actionable wake (the wake
+# is durably queued either way), and --restart still stops exactly this home's
+# watcher via the recorded lock pid. This arm never relaunches anything from
+# inside its own signal handler.
 #
 # --restart: stop ONLY this FM_HOME's watcher (the pid recorded in THIS home's
 # state/.watch.lock) and own a fresh cycle, or attach if a verified live peer
@@ -73,6 +98,9 @@ CYCLE_LOG_LOCK="$STATE/.watch-cycle-exits.lock"
 CYCLE_LOG_MAX_BYTES=${FM_WATCH_CYCLE_LOG_MAX_BYTES:-262144}
 CYCLE_LOG_KEEP_LINES=${FM_WATCH_CYCLE_LOG_KEEP_LINES:-1000}
 ARM_PID=${BASHPID:-$$}
+# Record parent identity now, while the parent is alive: an external tree kill
+# usually orphans this process before its signal handler can look.
+fm_signal_provenance_capture
 case "$CYCLE_LOG_MAX_BYTES" in ''|*[!0-9]*|0) CYCLE_LOG_MAX_BYTES=262144 ;; esac
 case "$CYCLE_LOG_KEEP_LINES" in ''|*[!0-9]*|0) CYCLE_LOG_KEEP_LINES=1000 ;; esac
 
@@ -285,7 +313,8 @@ attach_and_wait() {
 handle_attached_signal() {
   local signal=$1 rc=$2
   trap - HUP TERM INT
-  cycle_log_append "$rc" "$signal" arm-interrupted none
+  fm_signal_provenance_log "$STATE" fm-watch-arm "$signal" attached "$cycle_watcher_pid"
+  cycle_log_append "$rc" "$signal" arm-interrupted "detached:$cycle_watcher_pid"
   exit "$rc"
 }
 
@@ -354,10 +383,12 @@ if [ "$mode" = arm ] && healthy_watcher; then
   exit $?
 fi
 
-# Start a watcher as a tracked child and confirm it before settling in. The child
-# stays our child for its whole life: we wait on it, so killing this arm (the
-# harness-tracked task) tears the watcher down too, and the watcher's eventual
-# wake exit propagates out so the harness re-notifies firstmate.
+# Start a watcher as a tracked child and confirm it before settling in. We wait
+# on the child so its wake exit propagates out and the harness re-notifies
+# firstmate, but the child runs in its OWN process group and - once confirmed -
+# survives this arm's death (see the external-kill resilience contract in the
+# header). ARM_CONFIRMED flips exactly when the "watcher: started" line prints.
+ARM_CONFIRMED=0
 child=
 child_out=
 cleanup_child() {
@@ -371,8 +402,20 @@ cleanup_child() {
 
 # shellcheck disable=SC2329 # Invoked indirectly by the signal traps below.
 handle_arm_signal() {
-  local signal=$1 rc=$2
+  local signal=$1 rc=$2 phase=unconfirmed
   trap - HUP TERM INT
+  [ "$ARM_CONFIRMED" -eq 1 ] && phase=confirmed
+  fm_signal_provenance_log "$STATE" fm-watch-arm "$signal" "$phase" "${child:-none}"
+  if [ "$ARM_CONFIRMED" -eq 1 ]; then
+    # The confirmed watcher belongs to the singleton lock, not to this arm: leave
+    # it running so a fresh arm can attach. Its output goes to the (removed) temp
+    # file; the wake itself is durably queued by the watcher before it prints.
+    cycle_log_append "$rc" "$signal" arm-interrupted "detached:$child"
+    if [ -n "$child_out" ]; then
+      rm -f "$child_out" 2>/dev/null || true
+    fi
+    exit "$rc"
+  fi
   if [ -n "$child" ] && fm_pid_alive "$child"; then
     kill -TERM "$child" 2>/dev/null || true
     wait "$child" 2>/dev/null || true
@@ -390,8 +433,13 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
+# Job control gives the child its own process group, so a group-targeted kill
+# of this arm's task tree (the observed harness reap shape) cannot reach the
+# watcher. pid-directed signals (--restart, unconfirmed teardown) still work.
+set -m
 "$WATCH" >"$child_out" &
 child=$!
+set +m
 cycle_begin "$child" started
 child_done=0
 
@@ -418,6 +466,11 @@ owned_child_finished() {
       cycle_mark_predecessor_successor "attached:$HEALTHY_PID"
       report_attached
       cycle_begin "$HEALTHY_PID" attached
+      # From here this arm only follows a peer it does not own; record any
+      # signal with the attached handler's semantics (never kills a watcher).
+      trap 'handle_attached_signal HUP 129' HUP
+      trap 'handle_attached_signal TERM 143' TERM
+      trap 'handle_attached_signal INT 130' INT
       attach_and_wait "$HEALTHY_PID"
       return $?
     fi
@@ -456,6 +509,7 @@ while :; do
     if [ "$HEALTHY_PID" = "$child" ]; then
       cycle_refresh_lock_before
       cycle_mark_predecessor_successor "started:$child"
+      ARM_CONFIRMED=1
       echo "watcher: started pid=$child (beacon fresh)"
       wait "$child"
       rc=$?

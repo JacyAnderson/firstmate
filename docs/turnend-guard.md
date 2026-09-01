@@ -25,7 +25,12 @@ An unmarked checkout, or one with an invalid marker, falls through to the git-di
 That check keeps crewmate and scout worktrees inert because firstmate provisions them as linked git worktrees, where `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`.
 It also requires `AGENTS.md`, `bin/`, and the effective state directory to exist.
 
-For an in-scope primary checkout, it counts in-flight work from `state/*.meta`.
+For an in-scope primary checkout, before the in-flight gate, it checks away-mode daemon liveness: if `state/.afk` exists and no live daemon holds `state/.supervise-daemon.lock` (the `daemon_lock_held_by_live_daemon` predicate owned by `bin/fm-afk-start.sh`), the guard blocks with an away-mode-unsupervised banner even with zero tasks in flight.
+That is the state an external kill of the daemon's tracked background host task leaves behind, and no later turn would otherwise notice it; see `docs/watcher-continuity.md` "External arm kills".
+The `stop_hook_active` loop guard applies to this block exactly as to the watcher block.
+`bin/fm-guard.sh` carries the matching pull-based warning on every guarded command.
+
+It then counts in-flight work from `state/*.meta`.
 If no task is in flight, it exits silently.
 If work is in flight, it requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
 That is the same identity-matched live lock and fresh beacon check used by `bin/fm-watch-arm.sh`.
@@ -99,6 +104,7 @@ Observed output after the wake: Pi ran `bin/fm-wake-drain.sh`, read the terminal
 This 2026-07-09 observation predates extension-owned successor continuity; [`watcher-continuity.md`](watcher-continuity.md) owns the current ordinary-wake contract.
 The complete pane contained one guard message and zero foreground `bin/fm-watch-arm.sh` bash calls.
 `/quit` printed `PI_EXIT=0`, and the second arm process plus its watcher child were both gone afterward.
+That quit observation predates the external-kill survival contract (`docs/watcher-continuity.md` "External arm kills"): a confirmed watcher now outlives arm retirement, and the live E2E asserts the survivor stops through its recorded lock pid instead.
 
 Grok 0.2.91 was validated with a scratch `GROK_HOME` and symlinked auth/config.
 Hook file used for tracked project-hook loading: `<scratch-project>/.grok/hooks/fm-smoke.json`, matching the tracked `.grok/hooks/fm-primary-turnend-guard.json` location.
@@ -149,6 +155,6 @@ No Herdr command was issued and no fleet state was touched; the experiment wrote
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping (including a secondmate's own home being guarded like the main primary while its child worktrees stay exempt), `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
+`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping (including a secondmate's own home being guarded like the main primary while its child worktrees stay exempt), `FM_HOME` and `FM_STATE_OVERRIDE` precedence, the away-mode daemon-liveness block (`test_hook_blocks_when_afk_flag_has_no_daemon`, `test_hook_silent_when_afk_daemon_alive`), Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.
