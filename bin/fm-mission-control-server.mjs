@@ -37,9 +37,6 @@ const STATUSES = new Set(['active', 'waiting-on-you', 'parked']);
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_MESSAGE_CHARS = 10000;
 const MAX_GROUP_SLUGS = 200;
-// Sorting ranks (docs/mission-control.md "Ordering"): lower sorts first.
-const STATUS_RANK = { 'waiting-on-you': 0, active: 1, parked: 2 };
-const DEFAULT_PRIORITY = 3;
 
 let inboxSeq = 0;
 
@@ -120,16 +117,25 @@ function listCards() {
   return cards.sort(compareNeed);
 }
 
-// The documented ordering rule (docs/mission-control.md "Ordering"): status
-// rank, then backlog priority (0 most urgent, missing treated as 3), then
-// recency, then slug as a stable tie-break. /api/cards returns this order and
-// the board derives group order from it (first appearance wins).
+// Zone derivation (docs/mission-control.md "Ordering and zones"): a parked
+// card sits on the shelf; a card with an ask (status waiting-on-you, or any
+// decision line) needs the captain; everything else runs quietly.
+function zoneOf(card) {
+  if (card.status === 'parked') return 2;
+  if (card.status === 'waiting-on-you' || card.decisions.length) return 0;
+  return 1;
+}
+
+// The documented ordering rule (docs/mission-control.md "Ordering and
+// zones"): asks first with the oldest ask on top, then quiet active cards and
+// the shelf newest first, with the slug as a stable tie-break. /api/cards
+// returns this order and the board renders its zones straight from it.
 function compareNeed(a, b) {
-  const status = (STATUS_RANK[a.status] ?? 1) - (STATUS_RANK[b.status] ?? 1);
-  if (status) return status;
-  const priority = (a.priority ?? DEFAULT_PRIORITY) - (b.priority ?? DEFAULT_PRIORITY);
-  if (priority) return priority;
-  const recency = (Date.parse(b.updated) || 0) - (Date.parse(a.updated) || 0);
+  const zone = zoneOf(a) - zoneOf(b);
+  if (zone) return zone;
+  const ta = Date.parse(a.updated) || 0;
+  const tb = Date.parse(b.updated) || 0;
+  const recency = zoneOf(a) === 0 ? ta - tb : tb - ta;
   if (recency) return recency;
   return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
 }
@@ -163,6 +169,29 @@ function cardLinks(card) {
     if (/^https?:\/\//.test(l.target)) return { label: l.label, href: l.target, kind: 'external' };
     return { label: l.label, href: `/doc/${card.slug}/${i}`, kind: 'doc' };
   });
+}
+
+// Queued, not-yet-consumed inbox events per slug, counted from the inbox file
+// names (`<epoch-ms>-<seq>-<slug>.msg`; docs/mission-control.md "Inbox event
+// format"). The board renders this as the queued-for-pickup chip, which
+// disappears once firstmate consumes (deletes) the event file.
+function pendingCounts() {
+  const counts = new Map();
+  let names = [];
+  try {
+    names = readdirSync(INBOX_DIR);
+  } catch {
+    return counts;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.msg')) continue;
+    const parts = name.slice(0, -4).split('-');
+    if (parts.length < 3 || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1])) continue;
+    const slug = parts.slice(2).join('-');
+    if (!SLUG_RE.test(slug)) continue;
+    counts.set(slug, (counts.get(slug) || 0) + 1);
+  }
+  return counts;
 }
 
 // --- inbox writes ------------------------------------------------------------
@@ -268,86 +297,110 @@ function renderMarkdown(md) {
 
 // --- pages ---------------------------------------------------------------------
 
+// The Command Deck theme: the palette, grids, and typography follow the
+// owner-approved mock this rendering reproduces (docs/mission-control.md
+// "Ordering and zones").
 const PAGE_CSS = `
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 24px;
-         background: #f4f5f7; color: #1c1e21; max-width: 860px; margin-inline: auto; }
-  @media (prefers-color-scheme: dark) { body { background: #16181c; color: #e6e8eb; } }
-  h1 { font-size: 20px; margin: 0 0 16px; }
-  .card { background: #fff; border: 1px solid rgba(0,0,0,.1); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
-  @media (prefers-color-scheme: dark) { .card { background: #1f2228; border-color: rgba(255,255,255,.12); } }
-  .card.waiting { border-left: 4px solid #d97706; }
-  .card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .card-title { font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
-  .chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
-  .chip.active { background: #dcfce7; color: #14532d; }
-  .chip.waiting-on-you { background: #fef3c7; color: #92400e; }
-  .chip.parked { background: #e5e7eb; color: #374151; }
-  .chip.prio { background: #ede9fe; color: #5b21b6; font-weight: 600; }
-  .time { font-size: 12px; opacity: .55; white-space: nowrap; }
-  .board-summary { font-size: 13px; opacity: .65; margin: 0 0 16px; }
-  details.area-section { margin-bottom: 10px; }
-  details.area-section > summary { cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 10px 14px;
-    background: #fff; border: 1px solid rgba(0,0,0,.1); border-radius: 10px; font-weight: 600; font-size: 14px; }
-  @media (prefers-color-scheme: dark) { details.area-section > summary { background: #1f2228; border-color: rgba(255,255,255,.12); } }
-  details.area-section > summary::before { content: '\\25B8'; font-size: 11px; opacity: .5; }
-  details.area-section[open] > summary::before { content: '\\25BE'; }
-  details.area-section > .card, details.area-section > details.umbrella { margin-left: 18px; }
-  details.area-section > :nth-child(2) { margin-top: 10px; }
-  .area-name { flex: 1; }
-  .counts { display: inline-flex; gap: 6px; }
-  .count { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(0,0,0,.07); white-space: nowrap; }
-  @media (prefers-color-scheme: dark) { .count { background: rgba(255,255,255,.1); } }
-  .count.waiting { background: #fef3c7; color: #92400e; font-weight: 600; }
-  .count.parked { opacity: .7; }
-  details.umbrella { margin: 0 0 12px 18px; border-left: 2px solid rgba(0,0,0,.12); padding-left: 12px; }
-  @media (prefers-color-scheme: dark) { details.umbrella { border-left-color: rgba(255,255,255,.18); } }
-  details.umbrella > summary { cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 13px;
-    font-weight: 600; padding: 6px 2px; flex-wrap: wrap; }
-  details.umbrella > summary::before { content: '\\25B8'; font-size: 10px; opacity: .5; }
-  details.umbrella[open] > summary::before { content: '\\25BE'; }
-  .group-title { flex: 1; }
-  .group-actions { display: inline-flex; gap: 6px; }
-  button.mini { font-size: 11px; padding: 3px 8px; }
-  .badges { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
-  .badge { font-size: 12px; background: #fee2e2; color: #991b1b; border-radius: 6px; padding: 2px 8px; }
-  .latest { margin: 8px 0 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
-  .links { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; }
-  .links a { color: #2563eb; text-decoration: none; }
-  .links a:hover { text-decoration: underline; }
-  .controls { margin-top: 10px; display: flex; gap: 8px; align-items: flex-start; }
-  .controls textarea { flex: 1; min-height: 34px; max-height: 120px; resize: vertical; border-radius: 8px;
-                       border: 1px solid rgba(0,0,0,.15); padding: 6px 10px; font: inherit; font-size: 13px;
-                       background: inherit; color: inherit; }
-  button { font: inherit; font-size: 13px; border-radius: 8px; border: 1px solid rgba(0,0,0,.15);
-           background: transparent; color: inherit; padding: 6px 12px; cursor: pointer; }
-  button:hover { background: rgba(0,0,0,.06); }
-  @media (prefers-color-scheme: dark) { button:hover { background: rgba(255,255,255,.08); } }
-  button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
-  button.danger { color: #b91c1c; }
-  .empty { opacity: .6; font-size: 14px; margin: 32px 0; }
-  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1c1e21; color: #fff;
-           border-radius: 8px; padding: 8px 16px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
-  .toast.show { opacity: .92; }
-  .doc-body { background: #fff; border: 1px solid rgba(0,0,0,.1); border-radius: 10px; padding: 20px 24px; }
-  @media (prefers-color-scheme: dark) { .doc-body { background: #1f2228; border-color: rgba(255,255,255,.12); } }
-  .doc-body pre { overflow-x: auto; background: rgba(0,0,0,.05); padding: 10px; border-radius: 8px; }
-  a.back { display: inline-block; margin-bottom: 12px; color: #2563eb; text-decoration: none; font-size: 13px; }
+  :root{
+    --bg:#0e1013; --panel:#15181d; --panel2:#1b1f26; --line:#262b33;
+    --text:#e6e9ee; --dim:#8a93a1; --faint:#5c6572;
+    --you:#f5b944; --ok:#4cc38a; --run:#5b9cf5; --park:#6b7482; --danger:#e5644e;
+    font-size:15px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:400 1rem/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  header.top{padding:22px 32px 14px;}
+  header.top h1{font-size:1.25rem;margin:0;font-weight:650;}
+  .deck{max-width:1220px;margin:0 auto;padding:10px 32px 40px;}
+  .zone-title{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin:22px 0 10px;}
+  ul{list-style:none;margin:0;padding:0;}
+
+  /* needs-you rows */
+  li.ask{display:grid;grid-template-columns:190px 1fr 96px 96px 40px;gap:14px;align-items:center;
+    background:var(--panel2);border:1px solid #3a3414;border-left:3px solid var(--you);border-radius:8px;padding:12px 16px;margin-bottom:8px;position:relative;}
+  li.ask .init{font-weight:650;}
+  li.ask .what small{display:block;color:var(--dim);}
+  li.ask .age{color:var(--dim);text-align:right;font-variant-numeric:tabular-nums;}
+  li.ask .age.hot{color:var(--danger);font-weight:650;}
+  .btn{display:inline-block;text-align:center;text-decoration:none;border:1px solid #3d4550;background:#20262e;color:var(--text);border-radius:6px;padding:5px 12px;font:600 .85rem/1.3 inherit;cursor:pointer;white-space:nowrap;}
+  .btn:hover{border-color:#525c69;}
+
+  /* the lifecycle menu */
+  .more{border:none;background:none;color:var(--faint);font:700 1.1rem/1 inherit;cursor:pointer;padding:6px;border-radius:6px;text-align:center;}
+  .more:hover{background:#242a33;color:var(--text);}
+  .menu{position:absolute;right:10px;top:44px;z-index:9;background:#20252d;border:1px solid #39414d;border-radius:8px;
+    box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:230px;padding:6px;display:none;}
+  .menu.open{display:block;}
+  .menu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);
+    font:500 .9rem/1.4 inherit;padding:8px 10px;border-radius:6px;cursor:pointer;}
+  .menu button small{display:block;color:var(--faint);font-size:.78rem;}
+  .menu button:hover{background:#2a313b;}
+  .menu button.retire{color:#f0a196;}
+  .menu hr{border:none;border-top:1px solid #2c333d;margin:6px 4px;}
+  .quiet .menu,.shelf .menu{top:34px;}
+
+  /* quiet strip */
+  .quiet li{display:grid;grid-template-columns:190px 14px 1fr 40px;gap:14px;align-items:center;padding:7px 16px;border-bottom:1px solid var(--line);color:var(--dim);position:relative;}
+  .quiet li .init{color:var(--text);font-weight:550;}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+  .dot.ok{background:var(--ok);} .dot.run{background:var(--run);}
+
+  /* shelf */
+  .shelf{margin-top:26px;border:1px dashed #333b46;border-radius:10px;padding:4px 16px 10px;}
+  .shelf .zone-title{margin-top:12px;color:var(--park);}
+  .shelf li{display:grid;grid-template-columns:190px 1fr 110px 40px;gap:14px;align-items:center;padding:7px 0;border-bottom:1px solid #1d222a;color:var(--faint);position:relative;}
+  .shelf li:last-child{border-bottom:none;}
+  .shelf li .init{color:var(--dim);font-weight:550;text-decoration:none;}
+  .shelf .btn{opacity:.85;}
+
+  /* umbrella children fold indented under their parent row */
+  li.child .init{padding-left:18px;position:relative;}
+  li.child .init::before{content:'\\21B3';position:absolute;left:0;color:var(--faint);font-weight:400;}
+
+  /* per-row note editor */
+  .note{grid-column:1/-1;display:flex;gap:8px;align-items:flex-start;margin-top:6px;}
+  .quiet .note,.shelf .note{margin:6px 0 8px;}
+  .note textarea{flex:1;min-height:34px;max-height:120px;resize:vertical;border-radius:6px;border:1px solid #3d4550;
+    background:#12151a;color:var(--text);padding:6px 10px;font:inherit;font-size:.9rem;}
+  .btn.subtle{opacity:.7;}
+
+  /* queued-for-pickup send feedback */
+  .sent{grid-column:1/-1;display:flex;gap:8px;align-items:center;margin-top:6px;font-size:.85rem;color:var(--dim);}
+  .quiet .sent,.shelf .sent{margin:2px 0 8px;}
+  .chip-queued{border:1px solid #3d4550;background:#171b21;color:var(--dim);border-radius:999px;
+    padding:1px 8px;font-size:.75rem;white-space:nowrap;}
+
+  .empty{color:var(--dim);margin:32px 0;}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#20262e;border:1px solid #3d4550;color:var(--text);
+    border-radius:8px;padding:8px 16px;font-size:.85rem;opacity:0;transition:opacity .2s;pointer-events:none;}
+  .toast.show{opacity:.95;}
+
+  /* doc pages */
+  .doc-wrap{max-width:860px;margin:0 auto;padding:10px 32px 40px;}
+  .doc-body{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:20px 24px;}
+  .doc-body pre{overflow-x:auto;background:#12151a;padding:10px;border-radius:8px;}
+  .doc-body code{background:#12151a;border-radius:4px;padding:1px 4px;}
+  .doc-body a{color:var(--run);}
+  a.back{display:inline-block;margin:16px 0 12px;color:var(--run);text-decoration:none;font-size:.85rem;}
 `;
 
 const BOARD_JS = `
   const POLL_MS = 5000;
   let lastPayload = '';
+  let lastCards = [];
+  // Open note editors, unsent drafts, the open menu, and this session's
+  // send confirmations survive re-renders.
+  const openNotes = new Set();
+  const drafts = {};
+  const confirmations = new Map();
+  let openMenu = '';
 
-  function relTime(iso) {
-    const t = Date.parse(iso);
-    if (Number.isNaN(t)) return iso || '';
-    const s = Math.floor((Date.now() - t) / 1000);
-    if (s < 60) return 'just now';
-    if (s < 3600) return Math.floor(s / 60) + 'm ago';
-    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-    return Math.floor(s / 86400) + 'd ago';
+  // Zone derivation mirrors the server's ordering rule: parked cards sit on
+  // the shelf, cards with an ask need the captain, the rest run quietly.
+  function zoneOf(card) {
+    if (card.status === 'parked') return 2;
+    if (card.status === 'waiting-on-you' || card.decisions.length) return 0;
+    return 1;
   }
 
   function el(tag, cls, text) {
@@ -373,232 +426,332 @@ const BOARD_JS = `
     if (!res.ok) throw new Error('request failed');
   }
 
-  function renderCard(card) {
-    const div = el('div', 'card' + (card.status === 'waiting-on-you' ? ' waiting' : ''));
-    div.dataset.slug = card.slug;
-    const head = el('div', 'card-head');
-    head.appendChild(el('h3', 'card-title', card.title));
-    if (card.priority !== null && card.priority !== undefined) head.appendChild(el('span', 'chip prio', 'P' + card.priority));
-    head.appendChild(el('span', 'chip ' + card.status, card.status === 'waiting-on-you' ? 'waiting on you' : card.status));
-    const time = el('span', 'time', relTime(card.updated));
-    time.title = card.updated;
-    head.appendChild(time);
-    div.appendChild(head);
-    if (card.decisions.length) {
-      const badges = el('div', 'badges');
-      for (const d of card.decisions) badges.appendChild(el('span', 'badge', 'decision: ' + d));
-      div.appendChild(badges);
-    }
-    if (card.latest) div.appendChild(el('div', 'latest', card.latest));
-    if (card.links.length) {
-      const links = el('div', 'links');
-      for (const l of card.links) {
-        const a = el('a', null, (l.kind === 'doc' ? '\\u{1F4C4} ' : '\\u{1F517} ') + l.label);
-        a.href = l.href;
-        if (l.kind === 'external') { a.target = '_blank'; a.rel = 'noopener'; }
-        links.appendChild(a);
-      }
-      div.appendChild(links);
-    }
-    const controls = el('div', 'controls');
-    const box = el('textarea');
-    box.placeholder = 'Send direction for this initiative\\u2026';
-    box.dataset.draftFor = card.slug;
-    const send = el('button', 'primary', 'Send');
-    send.onclick = async () => {
-      const text = box.value.trim();
-      if (!text) return;
-      try {
-        await post('/api/message', { slug: card.slug, text });
-        box.value = '';
-        toast('Sent.');
-      } catch { toast('Could not send \\u2014 try again.'); }
-    };
-    controls.appendChild(box);
-    controls.appendChild(send);
-    if (card.status === 'parked') {
-      const re = el('button', null, 'Re-engage');
-      re.onclick = () => act(card.slug, 're-engage', 'Re-engaging.', re);
-      controls.appendChild(re);
-    } else {
-      const park = el('button', null, 'Park');
-      park.onclick = () => act(card.slug, 'park', 'Parked.', park);
-      controls.appendChild(park);
-    }
-    const drop = el('button', 'danger', 'Drop');
-    drop.onclick = () => act(card.slug, 'drop', 'Drop requested.', drop);
-    controls.appendChild(drop);
-    div.appendChild(controls);
-    return div;
+  function firstLine(text) {
+    return (text || '').split('\\n').map((l) => l.trim()).filter(Boolean)[0] || '';
   }
 
-  // The button stays disabled while its request is in flight so a rapid
-  // double click cannot queue duplicate events; re-enabling matters only on
-  // failure, since a success re-renders the card and replaces the button.
-  async function act(slug, action, doneMsg, btn) {
-    if (btn) btn.disabled = true;
-    try {
-      await post('/api/action', { slug, action });
-      toast(doneMsg);
-      refresh(true);
-    } catch {
-      toast('Could not send \\u2014 try again.');
-      if (btn) btn.disabled = false;
-    }
+  function age(iso) {
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return { label: '', hot: false };
+    const days = Math.floor((Date.now() - t) / 86400000);
+    if (days < 1) return { label: 'today', hot: false };
+    return { label: days + (days === 1 ? ' day' : ' days'), hot: days >= 7 };
   }
 
-  function saveDrafts() {
-    const drafts = {};
-    let focused = null;
-    for (const t of document.querySelectorAll('textarea[data-draft-for]')) {
-      if (t.value) drafts[t.dataset.draftFor] = t.value;
-      if (t === document.activeElement) focused = t.dataset.draftFor;
-    }
-    return { drafts, focused };
-  }
-
-  function restoreDrafts({ drafts, focused }) {
-    for (const t of document.querySelectorAll('textarea[data-draft-for]')) {
-      const slug = t.dataset.draftFor;
-      if (drafts[slug]) t.value = drafts[slug];
-      if (slug === focused) t.focus();
-    }
-  }
-
-  // Explicit user toggles survive re-renders: current open states are read
-  // back from the DOM before each render and reapplied by key; a section seen
-  // for the first time defaults to open only when something in it waits on
-  // the captain.
-  function saveOpen() {
-    const map = {};
-    for (const d of document.querySelectorAll('details[data-key]')) map[d.dataset.key] = d.open;
-    return map;
-  }
-
-  function applyOpen(details, open, fallback) {
-    details.open = details.dataset.key in open ? open[details.dataset.key] : fallback;
-  }
-
-  function countChips(group) {
-    const wrap = el('span', 'counts');
-    const waiting = group.filter((c) => c.status === 'waiting-on-you').length;
-    const parked = group.filter((c) => c.status === 'parked').length;
-    const active = group.length - waiting - parked;
-    if (waiting) wrap.appendChild(el('span', 'count waiting', waiting + ' waiting on you'));
-    if (active) wrap.appendChild(el('span', 'count', active + ' active'));
-    if (parked) wrap.appendChild(el('span', 'count parked', parked + ' parked'));
-    return wrap;
+  function shortDate(iso) {
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return '';
+    return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
 
   function plural(n, word) {
     return n + ' ' + word + (n === 1 ? '' : 's');
   }
 
-  async function groupAct(slugs, action, doneMsg, btn) {
+  // A successful send confirms on the row right away: the confirmation text
+  // is remembered per slug, the local card's pending count is bumped so the
+  // queued-for-pickup chip shows before the next poll, and the server's own
+  // pending count takes over from the forced refresh onward.
+  function noteQueued(slug, text) {
+    confirmations.set(slug, text);
+    const card = lastCards.find((c) => c.slug === slug);
+    if (card) card.pending = (card.pending || 0) + 1;
+    render(lastCards);
+    refresh(true);
+  }
+
+  // The button stays disabled while its request is in flight so a rapid
+  // double click cannot queue a duplicate event; re-enabling matters only on
+  // failure, since a success re-renders the row.
+  async function act(slug, action, doneMsg, btn) {
     if (btn) btn.disabled = true;
     try {
-      await post('/api/group-action', { slugs, action });
+      await post('/api/action', { slug, action });
       toast(doneMsg);
-      refresh(true);
+      noteQueued(slug, doneMsg);
     } catch {
       toast('Could not send \\u2014 try again.');
       if (btn) btn.disabled = false;
     }
   }
 
-  function groupButton(label, cls, handler) {
-    const b = el('button', cls, label);
+  // The queued-for-pickup line stays on the row while the initiative has
+  // unconsumed inbox events, and honestly says pickup happens on the next
+  // pass, not instantly; it disappears once the event files are consumed.
+  function feedbackLine(card) {
+    const msg = confirmations.get(card.slug);
+    if (!card.pending) {
+      if (msg) confirmations.delete(card.slug);
+      return null;
+    }
+    const box = el('div', 'sent');
+    const chip = el('span', 'chip-queued', 'queued for pickup');
+    chip.title = 'Queued \\u2014 picked up on the next pass, not instant.';
+    box.appendChild(chip);
+    box.appendChild(el('span', null, msg || 'Sent \\u2014 picked up on the next pass'));
+    return box;
+  }
+
+  function closeMenus() {
+    openMenu = '';
+    for (const m of document.querySelectorAll('.menu.open')) m.classList.remove('open');
+  }
+
+  function menuItem(label, small, cls, handler) {
+    const b = el('button', cls);
+    b.appendChild(document.createTextNode(label));
+    if (small) b.appendChild(el('small', null, small));
     b.onclick = (e) => {
-      e.preventDefault();
       e.stopPropagation();
+      closeMenus();
       handler(b);
     };
     return b;
   }
 
-  function renderUmbrella(key, title, members, open) {
-    const details = el('details', 'umbrella');
-    details.dataset.key = 'u:' + key;
-    const summary = el('summary');
-    summary.appendChild(el('span', 'group-title', title));
-    summary.appendChild(countChips(members));
-    const actions = el('span', 'group-actions');
-    const notParked = members.filter((c) => c.status !== 'parked').map((c) => c.slug);
-    const parked = members.filter((c) => c.status === 'parked').map((c) => c.slug);
-    const all = members.map((c) => c.slug);
-    if (notParked.length) {
-      actions.appendChild(groupButton('Park all', 'mini', (b) => {
-        if (!confirm('Park ' + plural(notParked.length, 'initiative') + ' under "' + title + '"?')) return;
-        groupAct(notParked, 'park', 'Parked.', b);
-      }));
+  // Every row carries the same lifecycle menu: Send a note (message event),
+  // Shelve (park event, absent on already-shelved rows), and Retire (drop
+  // event; a single click is intent, per the existing drop handling).
+  function rowMenu(card, row) {
+    const more = el('button', 'more', '\\u22EF');
+    const menu = el('div', 'menu');
+    more.onclick = (e) => {
+      e.stopPropagation();
+      const wasOpen = menu.classList.contains('open');
+      closeMenus();
+      if (!wasOpen) {
+        menu.classList.add('open');
+        openMenu = card.slug;
+      }
+    };
+    menu.appendChild(menuItem('Send a note', 'direction lands with the crew working this initiative', null, () => {
+      openNotes.add(card.slug);
+      render(lastCards);
+    }));
+    menu.appendChild(el('hr'));
+    if (card.status !== 'parked') {
+      menu.appendChild(menuItem('Shelve', 'pause everything safely; drops to the shelf below', null,
+        (b) => act(card.slug, 'park', 'Shelve queued \\u2014 picked up on the next pass', b)));
     }
-    if (parked.length) {
-      actions.appendChild(groupButton('Re-engage all', 'mini', (b) => {
-        if (!confirm('Re-engage ' + plural(parked.length, 'initiative') + ' under "' + title + '"?')) return;
-        groupAct(parked, 're-engage', 'Re-engaging.', b);
-      }));
-    }
-    actions.appendChild(groupButton('Drop all', 'mini danger', (b) => groupAct(all, 'drop', 'Drop requested.', b)));
-    summary.appendChild(actions);
-    details.appendChild(summary);
-    for (const c of members) details.appendChild(renderCard(c));
-    applyOpen(details, open, members.some((c) => c.status === 'waiting-on-you'));
-    return details;
+    menu.appendChild(menuItem('Retire', 'close it out for good; unfinished work is flagged first, never discarded', 'retire',
+      (b) => act(card.slug, 'drop', 'Retire queued \\u2014 picked up on the next pass', b)));
+    if (openMenu === card.slug) menu.classList.add('open');
+    row.appendChild(more);
+    row.appendChild(menu);
   }
 
-  // Cards arrive from /api/cards already in need order (the documented
-  // ordering rule); areas and umbrella groups keep first-appearance order, so
-  // the neediest group is always on top without re-sorting here.
+  function noteEditor(card) {
+    const box = el('div', 'note');
+    const ta = el('textarea');
+    ta.placeholder = 'Send direction for this initiative\\u2026';
+    ta.dataset.draftFor = card.slug;
+    if (drafts[card.slug]) ta.value = drafts[card.slug];
+    const send = el('button', 'btn', 'Send');
+    // The input clears the moment the note is submitted and the control stays
+    // disabled while the write is in flight; a failure restores the text.
+    send.onclick = async () => {
+      const text = ta.value.trim();
+      if (!text) return;
+      ta.value = '';
+      delete drafts[card.slug];
+      send.disabled = true;
+      try {
+        await post('/api/message', { slug: card.slug, text });
+        openNotes.delete(card.slug);
+        toast('Note sent \\u2014 queued for pickup.');
+        noteQueued(card.slug, 'Note sent \\u2014 queued for pickup on the next pass');
+      } catch {
+        ta.value = text;
+        drafts[card.slug] = text;
+        toast('Could not send \\u2014 try again.');
+        send.disabled = false;
+      }
+    };
+    const cancel = el('button', 'btn subtle', 'Cancel');
+    cancel.onclick = () => {
+      delete drafts[card.slug];
+      openNotes.delete(card.slug);
+      render(lastCards);
+    };
+    box.appendChild(ta);
+    box.appendChild(send);
+    box.appendChild(cancel);
+    return box;
+  }
+
+  // The ask in plain language: the first pending decision leads; extra
+  // decisions or the latest update give the small second line.
+  function askOf(card) {
+    if (card.decisions.length) {
+      const sub = card.decisions.length > 1 ? card.decisions.slice(1).join(' \\u00b7 ') : firstLine(card.latest);
+      return { main: card.decisions[0], sub };
+    }
+    return { main: firstLine(card.latest) || 'Waiting on you', sub: '' };
+  }
+
+  function actionCell(card) {
+    const cell = el('span');
+    const link = card.links[0];
+    if (link) {
+      const a = el('a', 'btn', link.label);
+      a.href = link.href;
+      if (link.kind === 'external') {
+        a.target = '_blank';
+        a.rel = 'noopener';
+      }
+      cell.appendChild(a);
+    }
+    return cell;
+  }
+
+  function askRow(card, child) {
+    const li = el('li', 'ask' + (child ? ' child' : ''));
+    li.appendChild(el('span', 'init', card.title));
+    const ask = askOf(card);
+    const what = el('span', 'what', ask.main);
+    if (ask.sub) what.appendChild(el('small', null, ask.sub));
+    li.appendChild(what);
+    const a = age(card.updated);
+    const ageEl = el('span', 'age' + (a.hot ? ' hot' : ''), a.label);
+    ageEl.title = card.updated;
+    li.appendChild(ageEl);
+    li.appendChild(actionCell(card));
+    rowMenu(card, li);
+    if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
+    const fb = feedbackLine(card);
+    if (fb) li.appendChild(fb);
+    return li;
+  }
+
+  function quietRow(card, child) {
+    const li = el('li', child ? 'child' : null);
+    li.appendChild(el('span', 'init', card.title));
+    li.appendChild(el('span', 'dot run'));
+    li.appendChild(el('span', null, firstLine(card.latest)));
+    rowMenu(card, li);
+    if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
+    const fb = feedbackLine(card);
+    if (fb) li.appendChild(fb);
+    return li;
+  }
+
+  function shelfRow(card, child) {
+    const li = el('li', child ? 'child' : null);
+    li.appendChild(el('span', 'init', card.title));
+    const line = firstLine(card.latest);
+    const when = shortDate(card.updated);
+    li.appendChild(el('span', null, line + (when ? (line ? '; ' : '') + 'shelved ' + when : '')));
+    const cell = el('span');
+    const re = el('button', 'btn', 'Re-engage');
+    re.onclick = () => act(card.slug, 're-engage', 'Re-engage queued \\u2014 picked up on the next pass', re);
+    cell.appendChild(re);
+    li.appendChild(cell);
+    rowMenu(card, li);
+    if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
+    const fb = feedbackLine(card);
+    if (fb) li.appendChild(fb);
+    return li;
+  }
+
+  // Umbrella children fold indented under their parent when both share a
+  // zone; a child whose parent sits in another zone stays its own row, so an
+  // ask is never hidden inside a quiet group. Rows stay one per initiative.
+  function foldGroups(list) {
+    const heads = new Set();
+    for (const c of list) if (c.umbrella) heads.add(c.umbrella);
+    const bySlug = new Map(list.map((c) => [c.slug, c]));
+    const done = new Set();
+    const out = [];
+    for (const c of list) {
+      if (done.has(c.slug)) continue;
+      const key = c.umbrella || (heads.has(c.slug) ? c.slug : '');
+      if (!key) {
+        done.add(c.slug);
+        out.push({ card: c, child: false });
+        continue;
+      }
+      const head = bySlug.get(key);
+      if (!head) {
+        done.add(c.slug);
+        out.push({ card: c, child: false });
+        continue;
+      }
+      if (!done.has(head.slug)) {
+        done.add(head.slug);
+        out.push({ card: head, child: false });
+      }
+      for (const m of list) {
+        if (m.umbrella === key && !done.has(m.slug)) {
+          done.add(m.slug);
+          out.push({ card: m, child: true });
+        }
+      }
+    }
+    return out;
+  }
+
+  function saveDrafts() {
+    let focused = null;
+    for (const t of document.querySelectorAll('textarea[data-draft-for]')) {
+      if (t.value) drafts[t.dataset.draftFor] = t.value;
+      else delete drafts[t.dataset.draftFor];
+      if (t === document.activeElement) focused = t.dataset.draftFor;
+    }
+    return focused;
+  }
+
+  function restoreFocus(focused) {
+    if (!focused) return;
+    for (const t of document.querySelectorAll('textarea[data-draft-for]')) {
+      if (t.dataset.draftFor === focused) {
+        t.focus();
+        t.setSelectionRange(t.value.length, t.value.length);
+      }
+    }
+  }
+
+  // Cards arrive from /api/cards already in need order (asks first, oldest
+  // ask first); the three zones are cut straight from that order.
   function render(cards) {
-    const state = saveDrafts();
-    const open = saveOpen();
+    lastCards = cards;
+    const focused = saveDrafts();
     const root = document.getElementById('board');
     root.textContent = '';
-    if (!cards.length) {
-      root.appendChild(el('div', 'empty', 'No initiatives yet.'));
-      restoreDrafts(state);
-      return;
+    const asks = cards.filter((c) => zoneOf(c) === 0);
+    const quiet = cards.filter((c) => zoneOf(c) === 1);
+    const shelf = cards.filter((c) => zoneOf(c) === 2);
+
+    const askCount = asks.reduce((n, c) => n + Math.max(1, c.decisions.length), 0);
+    root.appendChild(el('p', 'zone-title', asks.length
+      ? 'Needs you \\u2014 ' + plural(askCount, 'ask') + ' across ' + plural(asks.length, 'initiative')
+      : 'Needs you \\u2014 nothing waiting on you'));
+    if (asks.length) {
+      const ul = el('ul');
+      for (const r of foldGroups(asks)) ul.appendChild(askRow(r.card, r.child));
+      root.appendChild(ul);
     }
-    const areas = new Map();
-    for (const c of cards) {
-      const key = c.area || '';
-      if (!areas.has(key)) areas.set(key, []);
-      areas.get(key).push(c);
+
+    if (quiet.length) {
+      const wrap = el('div', 'quiet');
+      wrap.appendChild(el('p', 'zone-title', 'Running quietly \\u2014 nothing for you'));
+      const ul = el('ul');
+      for (const r of foldGroups(quiet)) ul.appendChild(quietRow(r.card, r.child));
+      wrap.appendChild(ul);
+      root.appendChild(wrap);
     }
-    const waitingTotal = cards.filter((c) => c.status === 'waiting-on-you').length;
-    root.appendChild(el('div', 'board-summary',
-      plural(cards.length, 'initiative') + ' \\u00b7 ' + waitingTotal + ' waiting on you \\u00b7 ' + plural(areas.size, 'area')));
-    for (const [areaKey, areaCards] of areas) {
-      const section = el('details', 'area-section');
-      section.dataset.key = 'a:' + areaKey;
-      const summary = el('summary');
-      summary.appendChild(el('span', 'area-name', areaKey || 'General'));
-      summary.appendChild(countChips(areaCards));
-      section.appendChild(summary);
-      const umbrellas = new Set();
-      for (const c of areaCards) if (c.umbrella) umbrellas.add(c.umbrella);
-      // A card whose slug names an umbrella is that group's head card: it
-      // leads the group and lends it its title.
-      const groupOf = (c) => (c.umbrella && umbrellas.has(c.umbrella) ? c.umbrella
-        : umbrellas.has(c.slug) ? c.slug : '');
-      const renderedGroups = new Set();
-      for (const c of areaCards) {
-        const key = groupOf(c);
-        if (!key) {
-          section.appendChild(renderCard(c));
-          continue;
-        }
-        if (renderedGroups.has(key)) continue;
-        renderedGroups.add(key);
-        let members = areaCards.filter((m) => groupOf(m) === key);
-        const head = members.find((m) => m.slug === key);
-        if (head) members = [head, ...members.filter((m) => m !== head)];
-        section.appendChild(renderUmbrella(key, head ? head.title : key.replace(/-/g, ' '), members, open));
-      }
-      applyOpen(section, open, areaCards.some((c) => c.status === 'waiting-on-you'));
-      root.appendChild(section);
+
+    if (shelf.length) {
+      const wrap = el('div', 'shelf');
+      wrap.appendChild(el('p', 'zone-title', 'Shelf \\u2014 ' + shelf.length + ' shelved, out of the way until you bring '
+        + (shelf.length === 1 ? 'it' : 'them') + ' back'));
+      const ul = el('ul');
+      for (const r of foldGroups(shelf)) ul.appendChild(shelfRow(r.card, r.child));
+      wrap.appendChild(ul);
+      root.appendChild(wrap);
     }
-    restoreDrafts(state);
+
+    if (!cards.length) root.appendChild(el('div', 'empty', 'No initiatives yet.'));
+    restoreFocus(focused);
   }
 
   async function refresh(force) {
@@ -611,6 +764,7 @@ const BOARD_JS = `
     } catch { /* transient; next poll retries */ }
   }
 
+  document.addEventListener('click', () => closeMenus());
   refresh(true);
   setInterval(refresh, POLL_MS);
 `;
@@ -625,8 +779,8 @@ function boardPage() {
 <style>${PAGE_CSS}</style>
 </head>
 <body>
-<h1>Mission Control</h1>
-<div id="board"></div>
+<header class="top"><h1>Mission Control</h1></header>
+<div class="deck" id="board"></div>
 <div id="toast" class="toast"></div>
 <script>${BOARD_JS}</script>
 </body>
@@ -643,8 +797,10 @@ function docPage(title, bodyHtml) {
 <style>${PAGE_CSS}</style>
 </head>
 <body>
+<div class="doc-wrap">
 <a class="back" href="/">← Back to the board</a>
 <div class="doc-body">${bodyHtml}</div>
+</div>
 </body>
 </html>`;
 }
@@ -704,7 +860,8 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/cards') {
-      const cards = listCards().map((c) => ({ ...c, links: cardLinks(c) }));
+      const pending = pendingCounts();
+      const cards = listCards().map((c) => ({ ...c, links: cardLinks(c), pending: pending.get(c.slug) || 0 }));
       sendJson(res, 200, { cards });
       return;
     }

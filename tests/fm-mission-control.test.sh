@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Behavior tests for the Mission Control board (docs/mission-control.md):
 # server lifecycle via fm-mission-control.sh, card rendering from initiative
-# files, the documented need ordering of /api/cards (status, priority,
-# recency), area/umbrella/priority card fields, inbox event queueing including
-# batched group actions, local doc rendering with the data/ containment
-# boundary, the inbox poll script, and the registered watcher-check path
-# (shim registration, hash-validated snapshot execution, tamper refusal).
+# files, the documented zone ordering of /api/cards (asks first, oldest ask
+# first), area/umbrella/priority card fields, the command-deck board page and
+# its lifecycle menu, inbox event queueing including batched group actions,
+# local doc rendering with the data/ containment boundary, the inbox poll
+# script, and the registered watcher-check path (shim registration,
+# hash-validated snapshot execution, tamper refusal).
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -73,9 +74,21 @@ EOF
 printf -- '---\ntitle: Stub card\nstatus: active\nupdated: 2026-08-26T12:00:00Z\npriority: 9\n---' \
   > "$INITIATIVES/stub-card.md"
 
-# Ordering and grouping fixtures (docs/mission-control.md "Ordering and
-# grouping"): a P0 active card older than its peers, and an umbrella with a
-# P0 waiting child that must outrank a fresher waiting card.
+# An active card with a pending decision is an ask: it belongs in the
+# needs-you zone despite its active status.
+cat > "$INITIATIVES/ask-active.md" <<'EOF'
+---
+title: Choose the rollout window
+status: active
+updated: 2026-08-27T10:00:00Z
+decision: Which weekend do we roll out?
+---
+Rollout is staged and ready.
+EOF
+
+# Ordering fixtures (docs/mission-control.md "Ordering and zones"): an active
+# P0 card with no ask stays in the quiet zone, and an umbrella waiting child
+# older than another waiting card must sort above it (oldest ask first).
 cat > "$INITIATIVES/alpha-p0.md" <<'EOF'
 ---
 title: Alpha outage follow-up
@@ -142,19 +155,53 @@ pass "start is idempotent"
 
 out=$(curl -sf "$BASE/")
 assert_contains "$out" "Mission Control" "board page serves"
-assert_contains "$out" "id=\"board\"" "board page carries the card container"
+assert_contains "$out" "id=\"board\"" "board page carries the deck container"
 pass "board page renders"
 
-# One-click drop (docs/mission-control.md "Server wire contract"): neither the
-# per-card nor the group drop asks for confirmation, while group park and
-# re-engage keep theirs.
-assert_not_contains "$out" "closed out" "drop carries no confirmation prompt"
-assert_contains "$out" "drop.onclick = () => act(card.slug, 'drop'" "per-card drop is bound one-click"
-assert_contains "$out" "groupButton('Drop all', 'mini danger', (b) => groupAct(all, 'drop'" "group drop is bound one-click"
-assert_contains "$out" "confirm('Park " "group park still confirms"
-assert_contains "$out" "confirm('Re-engage " "group re-engage still confirms"
+# Command-deck rendering (docs/mission-control.md "Ordering and zones"): the
+# three zones, a lifecycle menu on every row wired to the existing event
+# kinds, one-click retire with no confirmation anywhere, and the in-flight
+# double-click guard.
+assert_contains "$out" "Needs you" "needs-you zone rendered"
+assert_contains "$out" "Running quietly" "quiet zone rendered"
+assert_contains "$out" "Shelf" "shelf zone rendered"
+assert_contains "$out" "'Send a note'" "menu offers send a note"
+assert_contains "$out" "act(card.slug, 'park'" "shelve is wired to the park event"
+assert_contains "$out" "act(card.slug, 'drop'" "retire is wired to the drop event"
+assert_contains "$out" "act(card.slug, 're-engage'" "re-engage is wired to its event"
+assert_contains "$out" "post('/api/message'" "send a note is wired to the message event"
+assert_not_contains "$out" "confirm(" "no board action asks for confirmation"
 assert_contains "$out" "if (btn) btn.disabled = true" "action buttons carry the in-flight double-click guard"
-pass "drop is one click on the board; group park and re-engage still confirm"
+pass "command-deck zones and lifecycle menu reuse the existing event kinds"
+
+# Umbrella folding (docs/mission-control.md "Ordering and zones"): executed
+# against the fold function the board page ships, a child whose umbrella head
+# shares the zone folds indented under it, while a child whose head sits in
+# another zone keeps its own sorted position as a plain row instead of pulling
+# its siblings out of order.
+printf '%s' "$out" | node -e '
+let src = "";
+process.stdin.on("data", (d) => (src += d));
+process.stdin.on("end", () => {
+  const at = src.indexOf("function foldGroups");
+  if (at < 0) throw new Error("foldGroups not found in the served page");
+  let depth = 0, end = -1;
+  for (let i = src.indexOf("{", at); i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) { end = i + 1; break; }
+  }
+  const foldGroups = eval("(" + src.slice(at, end) + ")");
+  const card = (slug, umbrella) => ({ slug, umbrella: umbrella || "" });
+  const rows = (list) => foldGroups(list).map((r) => r.card.slug + (r.child ? "*" : ""));
+  const headless = rows([card("child-a", "par"), card("other"), card("child-b", "par")]);
+  if (headless.join() !== "child-a,other,child-b")
+    throw new Error("headless children left their sorted positions: " + headless.join());
+  const folded = rows([card("par"), card("child-a", "par"), card("other"), card("child-b", "par")]);
+  if (folded.join() !== "par,child-a*,child-b*,other")
+    throw new Error("in-zone children did not fold under their head: " + folded.join());
+});
+' || fail "umbrella fold rendering misplaces headless children"
+pass "umbrella children fold under an in-zone head and stay put without one"
 
 cards=$(curl -sf "$BASE/api/cards")
 assert_contains "$cards" '"title":"Fix the flaky login tests"' "card title rendered from initiative file"
@@ -172,22 +219,24 @@ pass "GET /api/cards renders initiative files"
 
 # --- need ordering ---------------------------------------------------------------
 
-# Status rank, then priority (missing = 3), then recency, then slug: the P0
-# waiting child beats the fresher unprioritized waiting card, the P0 active
-# card beats fresher unprioritized actives, an out-of-range priority is
-# ignored, and parked sinks to the bottom.
+# Zone rank (ask, quiet, shelf), then oldest ask first within the ask zone and
+# newest first elsewhere, then slug: the older waiting child tops the fresher
+# waiting card, the active card with a decision joins the asks, the P0 active
+# card without an ask stays quiet and sorts by recency alone, and parked sinks
+# to the shelf.
 printf '%s' "$cards" | python3 -c '
 import json, sys
 
 cards = {c["slug"]: c for c in json.load(sys.stdin)["cards"]}
 order = list(cards)
-expected = ["study-decision-1", "fix-login-flakes", "alpha-p0", "study", "stub-card", "deploy-pipeline"]
+expected = ["study-decision-1", "fix-login-flakes", "ask-active",
+            "study", "stub-card", "alpha-p0", "deploy-pipeline"]
 assert order == expected, f"order {order} != {expected}"
 assert cards["study-decision-1"]["priority"] == 0, "priority not rendered as a number"
 assert cards["stub-card"]["priority"] is None, "out-of-range priority not nulled"
 assert cards["fix-login-flakes"]["area"] == "", "missing area not empty"
-' || fail "/api/cards need ordering or field rendering is wrong"
-pass "GET /api/cards sorts by the documented need order"
+' || fail "/api/cards zone ordering or field rendering is wrong"
+pass "GET /api/cards sorts asks first, oldest ask first"
 
 # --- local doc rendering and containment ---------------------------------------
 
@@ -226,6 +275,32 @@ act_file=$(find "$INBOX" -name '*-deploy-pipeline.msg' | head -1)
 [ -n "$act_file" ] || fail "action inbox file missing"
 assert_grep "kind: re-engage" "$act_file" "action event carries kind"
 pass "captain input lands as inbox event files"
+
+# --- pending send feedback --------------------------------------------------------
+
+# /api/cards reports each card's queued, not-yet-consumed inbox events (docs/
+# mission-control.md "Server wire contract"), so the board's queued-for-pickup
+# chip appears after a send and disappears once firstmate consumes the file.
+curl -sf "$BASE/api/cards" | python3 -c '
+import json, sys
+
+cards = {c["slug"]: c for c in json.load(sys.stdin)["cards"]}
+assert cards["fix-login-flakes"]["pending"] == 1, "message not counted as pending"
+assert cards["deploy-pipeline"]["pending"] == 1, "action not counted as pending"
+assert cards["study"]["pending"] == 0, "card without queued input not zero"
+' || fail "/api/cards pending counts are wrong after sends"
+curl -sf -X POST "$BASE/api/action" -H 'content-type: application/json' \
+  -d '{"slug":"stub-card","action":"park"}' > /dev/null || fail "park post failed"
+pending=$(curl -sf "$BASE/api/cards" | python3 -c '
+import json, sys
+print({c["slug"]: c for c in json.load(sys.stdin)["cards"]}["stub-card"]["pending"])')
+[ "$pending" = 1 ] || fail "stub-card pending is $pending after a send, expected 1"
+rm -f "$INBOX"/*-stub-card.msg
+pending=$(curl -sf "$BASE/api/cards" | python3 -c '
+import json, sys
+print({c["slug"]: c for c in json.load(sys.stdin)["cards"]}["stub-card"]["pending"])')
+[ "$pending" = 0 ] || fail "stub-card pending is $pending after consumption, expected 0"
+pass "pending counts appear on send and clear when the event file is consumed"
 
 # --- group actions ----------------------------------------------------------------
 

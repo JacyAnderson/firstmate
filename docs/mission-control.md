@@ -1,6 +1,6 @@
 # Mission Control
 
-Mission Control is a small always-listening local status board for the captain: one card per initiative, each carrying the latest plain-language update, direct links to its actionable things, a per-initiative message box, and lifecycle controls.
+Mission Control is a small always-listening local status board for the captain: one row per initiative, sorted into what needs the captain, what runs quietly, and what sits shelved, each row carrying the latest plain-language update, a direct link to its actionable thing, and a lifecycle menu.
 This document is the single owner of Mission Control's file schemas, the registry format, the inbox event format, and the board's wire contract.
 Launch, stop, and check-installation mechanics live in `bin/fm-mission-control.sh --help`; seeding mechanics live in `bin/fm-mission-control-seed.sh --help`; the agent-facing write contract lives in the `mission-control` skill.
 
@@ -51,14 +51,14 @@ Frontmatter is a block of `key: value` lines between two `---` lines, parsed lin
 - `title` (required) - the initiative in the captain's own words.
 - `status` (required) - `active`, `waiting-on-you`, or `parked`; an unknown value renders as `active`.
 - `updated` (required) - ISO 8601 UTC timestamp of the last update write; drives card sorting.
-- `area` (optional) - the repo or focus area the initiative belongs to; the board groups cards into one section per area, and cards without one land in the General section.
+- `area` (optional) - the repo or focus area the initiative belongs to; card data only, not a rendered grouping.
   The seed fills it from the backlog item's repo field.
-- `umbrella` (optional) - the slug of a parent initiative; cards sharing an umbrella value render as one group under that name inside their area, with group-level park, re-engage, and drop controls.
-  A card whose own slug equals the umbrella value is the group's head card and lends the group its title.
+- `umbrella` (optional) - the slug of a parent initiative; a child row folds indented under its parent's row when both sit in the same board zone.
+  A card whose own slug equals the umbrella value is the group's head card.
   The seed derives it from backlog ids of the form `<parent>-decision-<rest>`; firstmate sets it directly for other parent-child shapes.
-- `priority` (optional) - the backlog priority 0-4 (0 most urgent), copied from the backlog item when present; feeds the ordering rule below and renders as a `P<n>` chip.
+- `priority` (optional) - the backlog priority 0-4 (0 most urgent), copied from the backlog item when present; card data only, no longer part of the ordering rule below.
 - `work-items` (optional) - comma-separated backlog item ids linked to this initiative.
-- `decision` (optional, repeatable) - one pending captain decision per line; each renders as a badge on the card.
+- `decision` (optional, repeatable) - one pending captain decision per line; the first leads the row's ask text on the board, and any decision line places the card in the needs-you zone.
 - `link` (optional, repeatable) - `<label> <target>`, where the target is the last whitespace-separated token and the label is everything before it.
   A target starting with `https://` or `http://` renders as an external link (a PR, an MR, a dashboard).
   Any other target is a path relative to the home that must resolve under `data/`; the board renders that markdown file as HTML itself, so acting on a card never requires the terminal.
@@ -108,29 +108,39 @@ A request target that fails URL parsing is refused with 400 rather than taking t
 A POST body that does not parse as a JSON object (malformed JSON, `null`, a string, an array) is refused with 400 before any field is read.
 
 - `GET /` - the board page; it polls for card updates itself, so the captain refreshes nothing manually.
-- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), and `latest` (the latest-update text).
+- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), `latest` (the latest-update text), and `pending` (the count of the card's queued, not-yet-consumed inbox events, derived from the inbox file names).
   The array is sorted by the ordering rule below; consumers may rely on that order.
 - `POST /api/message` - JSON `{"slug", "text"}`; appends a `message` inbox event; 400 on an invalid slug or empty text.
 - `POST /api/action` - JSON `{"slug", "action"}` with action `park`, `re-engage`, or `drop`; appends the matching inbox event; 400 otherwise.
-- `POST /api/group-action` - JSON `{"slugs": [...], "action"}` with the same three actions; appends one ordinary per-slug inbox event for each listed slug, so group actions need no new inbox kind and membership is fixed by the explicit list the board displayed when the captain clicked - a card that joins the group later is never swept in.
+- `POST /api/group-action` - JSON `{"slugs": [...], "action"}` with the same three actions; appends one ordinary per-slug inbox event for each listed slug, so group actions need no new inbox kind and membership is fixed by the explicit list the caller sent - a card that joins the group later is never swept in.
   The whole batch is validated first (every slug valid, 1-200 entries); any bad entry is 400 with nothing written, and duplicate slugs collapse to one event.
 - `GET /doc/<slug>/<n>` - renders the initiative's n-th local `link:` target as HTML.
   The path comes from the server's own parse of the initiative file, never from the client, and must resolve (symlinks included) under the home's `data/` directory; anything else is 404.
 
-Every single-card action, including drop, and the group-level drop act immediately as inbox events on one click; group-level park and re-engage ask for confirmation first.
+Every board action, including drop, acts immediately as an inbox event on one click: the click is intent, and firstmate applies its normal safety rails when acting on the event.
 Each action button is disabled while its request is in flight, so a rapid double click cannot queue duplicate events.
+The board itself no longer surfaces group-level controls; `POST /api/group-action` remains part of the wire contract for other consumers.
 
-## Ordering and grouping
+## Ordering and zones
 
+A card has an ask when its status is `waiting-on-you` or it carries any `decision:` line; a parked card never counts as an ask.
 `GET /api/cards` returns cards sorted by need, most captain-attention first:
 
-1. Status rank: `waiting-on-you`, then `active`, then `parked`.
-2. Within a status: `priority` ascending (0 first); a card without one is treated as 3, so explicit 0-2 outrank unprioritized cards and 4 falls below them.
-3. Then `updated` recency, newest first, with the slug as a stable tie-break.
+1. Zone rank: cards with an ask, then quiet `active` cards, then `parked`.
+2. Within the ask zone: `updated` oldest first, so the longest-waiting ask tops the board.
+3. Within the other zones: `updated` newest first.
+4. The slug as a stable tie-break.
 
-The board renders one collapsible section per `area` (cards without one land in General), with umbrella groups nested inside their area.
-Sections, groups, and the cards inside them all keep the sorted order, and each section or group appears at the position of its own neediest card, so the neediest area is always on top.
-A section or group starts open only when something in it is waiting on the captain; everything else starts as a one-line summary with per-status counts, which keeps the board scannable at a hundred cards.
+The board (the owner-approved Command Deck rendering) cuts three zones straight from that order, one row per initiative:
+
+- **Needs you** - one row per initiative with an ask: title, the ask in plain language (the first `decision:` line, else the latest update), the age since `updated:` (red from 7 days), the first `link:` as an action button, and the lifecycle menu.
+- **Running quietly** - one-liner rows for active initiatives with no ask: title, status dot, latest-update snippet, and the menu.
+- **Shelf** - a dashed box of dimmed one-liners for parked initiatives, each with a Re-engage button and its shelved date from `updated:`.
+
+Every row's menu offers Send a note (opens the per-initiative message box, a `message` event), Shelve (a `park` event, omitted on already-shelved rows), and Retire (a `drop` event, one click).
+Submitting any input clears it immediately (a failed write restores the note text), keeps the control disabled while the write is in flight, and confirms inline on the row with a queued-for-pickup chip that stays until firstmate consumes the event file; the wording is deliberately honest that pickup happens on the next pass, not instantly.
+Umbrella children fold indented under their parent's row within a zone; a child whose parent sits in another zone renders as its own row, so an ask is never hidden inside a quiet group.
+Work items stay card data and never render as their own rows, which keeps the board calm at ten initiatives.
 
 ## Watcher integration
 
@@ -144,6 +154,6 @@ Notifications are board-only by captain decision (2026-08-26): no operating-syst
 
 ## Future work (phase 2, out of scope)
 
-- Decision badges deep-linking to their decision records.
+- Decision asks deep-linking to their decision records.
 - A per-card history view rendering the `## History` section.
 - Unread markers for updates the captain has not seen.
