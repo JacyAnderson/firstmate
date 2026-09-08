@@ -174,6 +174,35 @@ assert_not_contains "$out" "confirm(" "no board action asks for confirmation"
 assert_contains "$out" "if (btn) btn.disabled = true" "action buttons carry the in-flight double-click guard"
 pass "command-deck zones and lifecycle menu reuse the existing event kinds"
 
+# Umbrella folding (docs/mission-control.md "Ordering and zones"): executed
+# against the fold function the board page ships, a child whose umbrella head
+# shares the zone folds indented under it, while a child whose head sits in
+# another zone keeps its own sorted position as a plain row instead of pulling
+# its siblings out of order.
+printf '%s' "$out" | node -e '
+let src = "";
+process.stdin.on("data", (d) => (src += d));
+process.stdin.on("end", () => {
+  const at = src.indexOf("function foldGroups");
+  if (at < 0) throw new Error("foldGroups not found in the served page");
+  let depth = 0, end = -1;
+  for (let i = src.indexOf("{", at); i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) { end = i + 1; break; }
+  }
+  const foldGroups = eval("(" + src.slice(at, end) + ")");
+  const card = (slug, umbrella) => ({ slug, umbrella: umbrella || "" });
+  const rows = (list) => foldGroups(list).map((r) => r.card.slug + (r.child ? "*" : ""));
+  const headless = rows([card("child-a", "par"), card("other"), card("child-b", "par")]);
+  if (headless.join() !== "child-a,other,child-b")
+    throw new Error("headless children left their sorted positions: " + headless.join());
+  const folded = rows([card("par"), card("child-a", "par"), card("other"), card("child-b", "par")]);
+  if (folded.join() !== "par,child-a*,child-b*,other")
+    throw new Error("in-zone children did not fold under their head: " + folded.join());
+});
+' || fail "umbrella fold rendering misplaces headless children"
+pass "umbrella children fold under an in-zone head and stay put without one"
+
 cards=$(curl -sf "$BASE/api/cards")
 assert_contains "$cards" '"title":"Fix the flaky login tests"' "card title rendered from initiative file"
 assert_contains "$cards" '"status":"waiting-on-you"' "card status rendered"

@@ -671,14 +671,19 @@ const BOARD_JS = `
         continue;
       }
       const head = bySlug.get(key);
-      if (head && !done.has(head.slug)) {
+      if (!head) {
+        done.add(c.slug);
+        out.push({ card: c, child: false });
+        continue;
+      }
+      if (!done.has(head.slug)) {
         done.add(head.slug);
         out.push({ card: head, child: false });
       }
       for (const m of list) {
         if (m.umbrella === key && !done.has(m.slug)) {
           done.add(m.slug);
-          out.push({ card: m, child: !!head });
+          out.push({ card: m, child: true });
         }
       }
     }
