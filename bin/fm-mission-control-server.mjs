@@ -171,31 +171,36 @@ function cardLinks(card) {
   });
 }
 
-// Queued, not-yet-consumed inbox events per slug, counted from the inbox file
+// Queued, not-yet-consumed inbox events per slug, read from the inbox file
 // names (`<epoch-ms>-<seq>-<slug>.msg`; docs/mission-control.md "Inbox event
-// format"). The board renders this as the queued-for-pickup chip, which
-// disappears once firstmate consumes (deletes) the event file.
-function pendingCounts() {
-  const counts = new Map();
+// format"). The board shows queued-for-pickup feedback from this, and each
+// submitting session tracks its own event id (the file name, returned by the
+// POST) so a confirmation never outlives its own event or claims another
+// session's; it disappears once firstmate consumes (deletes) the file.
+function pendingEventsBySlug() {
+  const events = new Map();
   let names = [];
   try {
     names = readdirSync(INBOX_DIR);
   } catch {
-    return counts;
+    return events;
   }
-  for (const name of names) {
+  for (const name of names.sort()) {
     if (!name.endsWith('.msg')) continue;
     const parts = name.slice(0, -4).split('-');
     if (parts.length < 3 || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1])) continue;
     const slug = parts.slice(2).join('-');
     if (!SLUG_RE.test(slug)) continue;
-    counts.set(slug, (counts.get(slug) || 0) + 1);
+    if (!events.has(slug)) events.set(slug, []);
+    events.get(slug).push(name);
   }
-  return counts;
+  return events;
 }
 
 // --- inbox writes ------------------------------------------------------------
 
+// Returns the event file name, which doubles as the event id in POST
+// responses so a client can track its own submission's consumption.
 function writeInboxEvent(kind, slug, text, epochMs = Date.now()) {
   mkdirSync(INBOX_DIR, { recursive: true });
   inboxSeq = (inboxSeq + 1) % 10000;
@@ -203,6 +208,7 @@ function writeInboxEvent(kind, slug, text, epochMs = Date.now()) {
   const body = kind === 'message' ? `\n${text.trim()}\n` : '\n';
   const content = `kind: ${kind}\nslug: ${slug}\nts: ${new Date(epochMs).toISOString()}\n${body}`;
   writeFileSync(join(INBOX_DIR, name), content, { flag: 'wx', mode: 0o600 });
+  return name;
 }
 
 // --- markdown rendering ------------------------------------------------------
@@ -297,91 +303,201 @@ function renderMarkdown(md) {
 
 // --- pages ---------------------------------------------------------------------
 
-// The Command Deck theme: the palette, grids, and typography follow the
-// owner-approved mock this rendering reproduces (docs/mission-control.md
-// "Ordering and zones").
+// The flight-ops skin: palette, grids, lamps, meters, and typography follow
+// the owner-approved contract this rendering reproduces
+// (docs/mission-control.md "Ordering and zones").
 const PAGE_CSS = `
   :root{
-    --bg:#0e1013; --panel:#15181d; --panel2:#1b1f26; --line:#262b33;
-    --text:#e6e9ee; --dim:#8a93a1; --faint:#5c6572;
-    --you:#f5b944; --ok:#4cc38a; --run:#5b9cf5; --park:#6b7482; --danger:#e5644e;
-    font-size:15px;
+    --space:#090C11; --panel:#11151D; --panel2:#161B25; --bezel:#242C39; --etch:#2E3745;
+    --white:#EDEFF2; --ghost:#8C97A6; --stencil:#5F6A79;
+    --caution:#F2A93B; --warn:#E0592A; --go:#69B98C; --lamp-off:#1B212B;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:400 1rem/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
-  header.top{padding:22px 32px 14px;}
-  header.top h1{font-size:1.25rem;margin:0;font-weight:650;}
-  .deck{max-width:1220px;margin:0 auto;padding:10px 32px 40px;}
-  .zone-title{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin:22px 0 10px;}
+  body{margin:0;background:var(--space);color:var(--white);
+    font:400 15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background-image:
+      linear-gradient(rgba(140,151,166,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(140,151,166,.045) 1px, transparent 1px),
+      radial-gradient(ellipse at 25% -10%, rgba(224,89,42,.06), transparent 45%);
+    background-size:32px 32px, 32px 32px, auto;}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;}
+  .stencil{font-family:"Avenir Next Condensed","Arial Narrow",Impact,sans-serif;
+    font-weight:600;letter-spacing:.22em;text-transform:uppercase;}
+  .wrap{max-width:1100px;margin:0 auto;padding:0 28px 56px;}
+
+  /* corner brackets */
+  .frame{position:relative;}
+  .frame::before,.frame::after,
+  .frame>.fb::before,.frame>.fb::after{content:"";position:absolute;width:14px;height:14px;border:1.5px solid var(--ghost);}
+  .frame::before{left:-1px;top:-1px;border-right:none;border-bottom:none;}
+  .frame::after{right:-1px;top:-1px;border-left:none;border-bottom:none;}
+  .frame>.fb::before{left:-1px;bottom:-1px;border-right:none;border-top:none;}
+  .frame>.fb::after{right:-1px;bottom:-1px;border-left:none;border-top:none;}
+
+  /* ===== header: caution & warning panel ===== */
+  header{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;
+    border:1px solid var(--bezel);background:var(--panel);
+    padding:18px 22px;margin:26px 0 8px;}
+  .ident h1{margin:0;font-size:1.2rem;line-height:1.2;}
+  .ident h1 .stencil{font-size:1.35rem;letter-spacing:.34em;}
+  .met{color:var(--caution);font-size:1.05rem;letter-spacing:.24em;margin-top:6px;
+    text-shadow:0 0 12px rgba(242,169,59,.45);}
+  .met small{color:var(--stencil);font-size:.68rem;letter-spacing:.2em;display:block;text-shadow:none;margin-bottom:2px;}
+  .cw{display:grid;grid-template-columns:repeat(4,116px);gap:7px;}
+  .lamp{border:1px solid var(--etch);background:var(--lamp-off);
+    padding:7px 8px 6px;text-align:center;font-size:.62rem;letter-spacing:.14em;color:var(--stencil);
+    font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;font-weight:600;text-transform:uppercase;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04);}
+  .lamp b{display:block;font:700 1.2rem/1.15 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:0;}
+  .lamp.caution{background:rgba(242,169,59,.14);border-color:#57431f;color:#C99843;}
+  .lamp.caution b{color:var(--caution);text-shadow:0 0 12px rgba(242,169,59,.55);}
+  .lamp.warn{background:repeating-linear-gradient(45deg, rgba(224,89,42,.2) 0 8px, rgba(224,89,42,.08) 8px 16px);
+    border-color:#5c2c1a;color:#C06443;}
+  .lamp.warn b{color:var(--warn);text-shadow:0 0 12px rgba(224,89,42,.6);}
+  .lamp.go{background:rgba(105,185,140,.10);border-color:#28513c;color:#63A181;}
+  .lamp.go b{color:var(--go);text-shadow:0 0 10px rgba(105,185,140,.5);}
+
+  .subplate{display:flex;justify-content:space-between;color:var(--stencil);font-size:.66rem;
+    letter-spacing:.22em;text-transform:uppercase;margin:6px 2px 24px;
+    font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;}
+
+  h2{display:flex;align-items:center;gap:12px;margin:30px 0 10px;font-size:.8rem;color:var(--stencil);}
+  h2 .tag{border:1px solid var(--etch);padding:4px 12px;background:var(--panel);}
+  h2 small{color:var(--stencil);font-size:.7rem;letter-spacing:.12em;}
+  h2::after{content:"";flex:1;height:1px;background:repeating-linear-gradient(90deg,var(--etch) 0 6px,transparent 6px 12px);}
+
   ul{list-style:none;margin:0;padding:0;}
 
-  /* needs-you rows */
-  li.ask{display:grid;grid-template-columns:190px 1fr 96px 96px 40px;gap:14px;align-items:center;
-    background:var(--panel2);border:1px solid #3a3414;border-left:3px solid var(--you);border-radius:8px;padding:12px 16px;margin-bottom:8px;position:relative;}
-  li.ask .init{font-weight:650;}
-  li.ask .what small{display:block;color:var(--dim);}
-  li.ask .age{color:var(--dim);text-align:right;font-variant-numeric:tabular-nums;}
-  li.ask .age.hot{color:var(--danger);font-weight:650;}
-  .btn{display:inline-block;text-align:center;text-decoration:none;border:1px solid #3d4550;background:#20262e;color:var(--text);border-radius:6px;padding:5px 12px;font:600 .85rem/1.3 inherit;cursor:pointer;white-space:nowrap;}
-  .btn:hover{border-color:#525c69;}
+  li.ask{display:grid;grid-template-columns:38px 168px 1fr 190px 96px 34px;gap:13px;align-items:center;
+    background:var(--panel);border:1px solid var(--bezel);
+    padding:12px 14px 12px 0;margin-bottom:6px;animation:powerup .3s ease both;position:relative;}
+  li.ask:nth-child(2){animation-delay:.05s} li.ask:nth-child(3){animation-delay:.1s}
+  li.ask:nth-child(4){animation-delay:.15s} li.ask:nth-child(5){animation-delay:.2s}
+  li.ask:nth-child(6){animation-delay:.25s} li.ask:nth-child(7){animation-delay:.3s}
+  li.ask:nth-child(8){animation-delay:.35s}
+  @keyframes powerup{from{opacity:0;filter:brightness(2.2)}to{opacity:1;filter:none}}
+  @media (prefers-reduced-motion: reduce){li.ask{animation:none}}
+
+  /* status block: lamp + stencil word */
+  .stat{display:flex;flex-direction:column;align-items:center;gap:3px;align-self:stretch;justify-content:center;
+    border-right:1px solid var(--bezel);background:var(--panel2);padding:0 6px;}
+  .stat .ind{width:11px;height:11px;border-radius:2px;background:var(--caution);box-shadow:0 0 9px rgba(242,169,59,.55);}
+  .stat span{font-size:.5rem;letter-spacing:.12em;color:var(--stencil);text-transform:uppercase;
+    font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;font-weight:600;}
+  li.ask.hot .stat{background:repeating-linear-gradient(45deg, rgba(224,89,42,.14) 0 7px, transparent 7px 14px), var(--panel2);}
+  li.ask.hot .stat .ind{background:var(--warn);box-shadow:0 0 9px rgba(224,89,42,.65);animation:blink 2.4s step-end infinite;}
+  li.ask.hot .stat span{color:#C06443;}
+  @keyframes blink{0%,92%{opacity:1}96%{opacity:.3}100%{opacity:1}}
+  @media (prefers-reduced-motion: reduce){li.ask.hot .stat .ind{animation:none}}
+
+  /* grid cells default to min-width:auto, which lets a long label or word
+     force the row past the viewport; cap them so content truncates or wraps
+     inside the row instead. */
+  li.ask>span,.quiet li>span,.shelf li>span{min-width:0;}
+  li.ask .init{font-weight:650;font-size:.95rem;overflow-wrap:break-word;}
+  li.ask .what{color:var(--white);overflow-wrap:break-word;}
+  li.ask .what small{display:block;color:var(--ghost);font-size:.85rem;}
+
+  /* labeled days-waiting meter */
+  .meter{display:flex;flex-direction:column;gap:3px;}
+  .meter .row1{display:flex;justify-content:space-between;align-items:baseline;}
+  .meter .label{font-size:.56rem;letter-spacing:.16em;color:var(--stencil);text-transform:uppercase;
+    font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;font-weight:600;}
+  .meter .val{font-size:.85rem;color:var(--white);font-weight:700;}
+  li.ask.hot .meter .val{color:var(--warn);}
+  .meter .track{position:relative;height:8px;background:var(--lamp-off);border:1px solid var(--etch);}
+  .meter .track i{position:absolute;left:0;top:0;bottom:0;background:var(--caution);}
+  li.ask.hot .track i{background:var(--warn);}
+  .meter .track em{position:absolute;top:-2px;bottom:-2px;width:1.5px;background:var(--ghost);left:50%;}
+  .meter .scale{display:flex;justify-content:space-between;font-size:.54rem;color:var(--stencil);letter-spacing:.06em;}
+
+  .btn{border:1px solid #6b4a22;background:linear-gradient(180deg,#241d11,#191408);color:var(--caution);
+    padding:7px 13px;font:700 .76rem/1.2 "Avenir Next Condensed","Arial Narrow",sans-serif;
+    letter-spacing:.16em;text-transform:uppercase;cursor:pointer;white-space:nowrap;
+    text-decoration:none;display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.06), 0 1px 0 rgba(0,0,0,.5);}
+  .btn::before{content:"▸ ";}
+  .btn:hover{background:#2b2312;}
+  .btn:focus-visible{outline:2px solid var(--caution);outline-offset:2px;}
+  .btn.subtle{border-color:var(--etch);color:var(--ghost);background:var(--panel2);}
+  .more{border:none;background:none;color:var(--stencil);font:700 1.05rem/1 inherit;cursor:pointer;padding:6px;}
+  .more:hover{background:var(--panel2);color:var(--white);}
+  .more:focus-visible{outline:2px solid var(--caution);outline-offset:1px;}
 
   /* the lifecycle menu */
-  .more{border:none;background:none;color:var(--faint);font:700 1.1rem/1 inherit;cursor:pointer;padding:6px;border-radius:6px;text-align:center;}
-  .more:hover{background:#242a33;color:var(--text);}
-  .menu{position:absolute;right:10px;top:44px;z-index:9;background:#20252d;border:1px solid #39414d;border-radius:8px;
+  .menu{position:absolute;right:10px;top:44px;z-index:9;background:var(--panel2);border:1px solid var(--etch);
     box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:230px;padding:6px;display:none;}
   .menu.open{display:block;}
-  .menu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);
-    font:500 .9rem/1.4 inherit;padding:8px 10px;border-radius:6px;cursor:pointer;}
-  .menu button small{display:block;color:var(--faint);font-size:.78rem;}
-  .menu button:hover{background:#2a313b;}
-  .menu button.retire{color:#f0a196;}
-  .menu hr{border:none;border-top:1px solid #2c333d;margin:6px 4px;}
+  /* Deliberate deviation from the approved-skin contract: rows omit its
+     overflow:hidden and the row owning an open menu is raised, because the
+     powerup filter animation creates stacking contexts that would otherwise
+     clip or cover the open menu (browser-verified). */
+  li:has(> .menu.open){z-index:10;}
+  .menu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--white);
+    font:500 .9rem/1.4 inherit;padding:8px 10px;cursor:pointer;}
+  .menu button small{display:block;color:var(--stencil);font-size:.78rem;}
+  .menu button:hover{background:var(--bezel);}
+  .menu button.retire{color:#C06443;}
+  .menu hr{border:none;border-top:1px solid var(--etch);margin:6px 4px;}
   .quiet .menu,.shelf .menu{top:34px;}
 
-  /* quiet strip */
-  .quiet li{display:grid;grid-template-columns:190px 14px 1fr 40px;gap:14px;align-items:center;padding:7px 16px;border-bottom:1px solid var(--line);color:var(--dim);position:relative;}
-  .quiet li .init{color:var(--text);font-weight:550;}
-  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
-  .dot.ok{background:var(--ok);} .dot.run{background:var(--run);}
+  .quiet li{display:grid;grid-template-columns:38px 168px 1fr 34px;gap:13px;align-items:center;
+    padding:8px 14px 8px 0;border-bottom:1px solid var(--bezel);color:var(--ghost);position:relative;}
+  .quiet .stat{border-right:none;background:none;}
+  .quiet .stat .ind{background:var(--go);box-shadow:0 0 8px rgba(105,185,140,.5);}
+  .quiet .stat span{color:#4c7a63;}
+  .quiet li .init{color:var(--white);font-weight:550;}
 
-  /* shelf */
-  .shelf{margin-top:26px;border:1px dashed #333b46;border-radius:10px;padding:4px 16px 10px;}
-  .shelf .zone-title{margin-top:12px;color:var(--park);}
-  .shelf li{display:grid;grid-template-columns:190px 1fr 110px 40px;gap:14px;align-items:center;padding:7px 0;border-bottom:1px solid #1d222a;color:var(--faint);position:relative;}
+  .shelf{margin-top:30px;border:1px dashed var(--etch);padding:2px 16px 10px;}
+  .shelf h2{margin-top:12px;}
+  .shelf li{display:grid;grid-template-columns:168px 1fr 110px 34px;gap:13px;align-items:center;
+    padding:8px 0;color:var(--stencil);border-bottom:1px solid #151b24;position:relative;}
   .shelf li:last-child{border-bottom:none;}
-  .shelf li .init{color:var(--dim);font-weight:550;text-decoration:none;}
-  .shelf .btn{opacity:.85;}
+  .shelf li .init{color:var(--ghost);font-weight:550;}
+  .shelf .btn{border-color:var(--etch);color:var(--ghost);background:var(--panel2);}
+  .shelf .btn::before{content:"↺ ";}
 
   /* umbrella children fold indented under their parent row */
   li.child .init{padding-left:18px;position:relative;}
-  li.child .init::before{content:'\\21B3';position:absolute;left:0;color:var(--faint);font-weight:400;}
+  li.child .init::before{content:'\\21B3';position:absolute;left:0;color:var(--stencil);font-weight:400;}
 
   /* per-row note editor */
-  .note{grid-column:1/-1;display:flex;gap:8px;align-items:flex-start;margin-top:6px;}
-  .quiet .note,.shelf .note{margin:6px 0 8px;}
-  .note textarea{flex:1;min-height:34px;max-height:120px;resize:vertical;border-radius:6px;border:1px solid #3d4550;
-    background:#12151a;color:var(--text);padding:6px 10px;font:inherit;font-size:.9rem;}
-  .btn.subtle{opacity:.7;}
+  .note{display:flex;gap:8px;align-items:flex-start;margin-top:6px;}
+  li.ask .note{grid-column:2/-1;padding-right:14px;}
+  .quiet .note{grid-column:2/-1;margin:2px 0 8px;padding-right:14px;}
+  .shelf .note{grid-column:1/-1;margin:2px 0 8px;}
+  .note textarea{flex:1;min-height:34px;max-height:120px;resize:vertical;border:1px solid var(--etch);
+    background:var(--lamp-off);color:var(--white);padding:6px 10px;font:inherit;font-size:.9rem;}
 
   /* queued-for-pickup send feedback */
-  .sent{grid-column:1/-1;display:flex;gap:8px;align-items:center;margin-top:6px;font-size:.85rem;color:var(--dim);}
-  .quiet .sent,.shelf .sent{margin:2px 0 8px;}
-  .chip-queued{border:1px solid #3d4550;background:#171b21;color:var(--dim);border-radius:999px;
-    padding:1px 8px;font-size:.75rem;white-space:nowrap;}
+  .sent{grid-column:3/-1;font-size:.78rem;color:var(--go);padding-top:2px;letter-spacing:.06em;
+    text-transform:uppercase;font-family:ui-monospace,"SF Mono",Menlo,monospace;}
+  .sent::before{content:"● ";}
+  .quiet .sent,.shelf .sent{grid-column:2/-1;}
 
-  .empty{color:var(--dim);margin:32px 0;}
-  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#20262e;border:1px solid #3d4550;color:var(--text);
-    border-radius:8px;padding:8px 16px;font-size:.85rem;opacity:0;transition:opacity .2s;pointer-events:none;}
+  footer.plate{margin-top:36px;display:flex;justify-content:space-between;align-items:center;
+    color:var(--stencil);font-size:.66rem;letter-spacing:.22em;text-transform:uppercase;
+    font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;border-top:1px solid var(--bezel);padding-top:12px;}
+  footer.plate .go{color:var(--go);}
+
+  .empty{color:var(--ghost);margin:32px 0;}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--etch);
+    color:var(--white);padding:8px 16px;font-size:.85rem;opacity:0;transition:opacity .2s;pointer-events:none;}
   .toast.show{opacity:.95;}
 
   /* doc pages */
   .doc-wrap{max-width:860px;margin:0 auto;padding:10px 32px 40px;}
-  .doc-body{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:20px 24px;}
-  .doc-body pre{overflow-x:auto;background:#12151a;padding:10px;border-radius:8px;}
-  .doc-body code{background:#12151a;border-radius:4px;padding:1px 4px;}
-  .doc-body a{color:var(--run);}
-  a.back{display:inline-block;margin:16px 0 12px;color:var(--run);text-decoration:none;font-size:.85rem;}
+  .doc-body{background:var(--panel);border:1px solid var(--bezel);padding:20px 24px;}
+  .doc-body pre{overflow-x:auto;background:var(--lamp-off);padding:10px;}
+  .doc-body code{background:var(--lamp-off);padding:1px 4px;}
+  .doc-body a{color:var(--caution);}
+  a.back{display:inline-block;margin:16px 0 12px;color:var(--caution);text-decoration:none;font-size:.85rem;}
+
+  @media (max-width:800px){
+    li.ask{grid-template-columns:38px 1fr 96px;}
+    li.ask .init{grid-column:2/-1;}
+    .cw{grid-template-columns:repeat(2,116px);}
+  }
 `;
 
 const BOARD_JS = `
@@ -424,18 +540,19 @@ const BOARD_JS = `
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('request failed');
+    return res.json();
   }
 
   function firstLine(text) {
     return (text || '').split('\\n').map((l) => l.trim()).filter(Boolean)[0] || '';
   }
 
+  // Days an ask has waited on the captain; hot from the 7-day limit up.
   function age(iso) {
     const t = Date.parse(iso);
-    if (Number.isNaN(t)) return { label: '', hot: false };
-    const days = Math.floor((Date.now() - t) / 86400000);
-    if (days < 1) return { label: 'today', hot: false };
-    return { label: days + (days === 1 ? ' day' : ' days'), hot: days >= 7 };
+    if (Number.isNaN(t)) return { days: null, hot: false };
+    const days = Math.max(0, Math.floor((Date.now() - t) / 86400000));
+    return { days, hot: days >= 7 };
   }
 
   function shortDate(iso) {
@@ -444,18 +561,18 @@ const BOARD_JS = `
     return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
 
-  function plural(n, word) {
-    return n + ' ' + word + (n === 1 ? '' : 's');
-  }
-
   // A successful send confirms on the row right away: the confirmation text
-  // is remembered per slug, the local card's pending count is bumped so the
-  // queued-for-pickup chip shows before the next poll, and the server's own
-  // pending count takes over from the forced refresh onward.
-  function noteQueued(slug, text) {
-    confirmations.set(slug, text);
+  // and the submitted event's id are remembered per slug, the local card's
+  // pending state is bumped so the queued-for-pickup line shows before the
+  // next poll, and the server's own pending events take over from the forced
+  // refresh onward.
+  function noteQueued(slug, text, event) {
+    confirmations.set(slug, { text, event: event || '' });
     const card = lastCards.find((c) => c.slug === slug);
-    if (card) card.pending = (card.pending || 0) + 1;
+    if (card) {
+      card.pendingEvents = (card.pendingEvents || []).concat(event || []);
+      card.pending = (card.pending || 0) + 1;
+    }
     render(lastCards);
     refresh(true);
   }
@@ -466,9 +583,9 @@ const BOARD_JS = `
   async function act(slug, action, doneMsg, btn) {
     if (btn) btn.disabled = true;
     try {
-      await post('/api/action', { slug, action });
+      const r = await post('/api/action', { slug, action });
       toast(doneMsg);
-      noteQueued(slug, doneMsg);
+      noteQueued(slug, doneMsg, r && r.event);
     } catch {
       toast('Could not send \\u2014 try again.');
       if (btn) btn.disabled = false;
@@ -477,18 +594,20 @@ const BOARD_JS = `
 
   // The queued-for-pickup line stays on the row while the initiative has
   // unconsumed inbox events, and honestly says pickup happens on the next
-  // pass, not instantly; it disappears once the event files are consumed.
+  // pass, not instantly. A confirmation is tied to its own submitted event
+  // id: once that event is consumed the confirmation goes with it, and other
+  // sessions' queued events show neutral wording instead of claiming "Sent".
   function feedbackLine(card) {
-    const msg = confirmations.get(card.slug);
+    const entry = confirmations.get(card.slug);
+    const queued = card.pendingEvents || [];
+    if (entry && entry.event && !queued.includes(entry.event)) confirmations.delete(card.slug);
     if (!card.pending) {
-      if (msg) confirmations.delete(card.slug);
+      confirmations.delete(card.slug);
       return null;
     }
-    const box = el('div', 'sent');
-    const chip = el('span', 'chip-queued', 'queued for pickup');
-    chip.title = 'Queued \\u2014 picked up on the next pass, not instant.';
-    box.appendChild(chip);
-    box.appendChild(el('span', null, msg || 'Sent \\u2014 picked up on the next pass'));
+    const mine = confirmations.get(card.slug);
+    const box = el('span', 'sent', mine ? mine.text : 'Queued \\u2014 picked up on the next pass');
+    box.title = 'Queued for pickup \\u2014 picked up on the next pass, not instant.';
     return box;
   }
 
@@ -556,10 +675,10 @@ const BOARD_JS = `
       delete drafts[card.slug];
       send.disabled = true;
       try {
-        await post('/api/message', { slug: card.slug, text });
+        const r = await post('/api/message', { slug: card.slug, text });
         openNotes.delete(card.slug);
         toast('Note sent \\u2014 queued for pickup.');
-        noteQueued(card.slug, 'Note sent \\u2014 queued for pickup on the next pass');
+        noteQueued(card.slug, 'Note sent \\u2014 queued for pickup on the next pass', r && r.event);
       } catch {
         ta.value = text;
         drafts[card.slug] = text;
@@ -594,6 +713,9 @@ const BOARD_JS = `
     const link = card.links[0];
     if (link) {
       const a = el('a', 'btn', link.label);
+      // A long label truncates with an ellipsis inside its column; the full
+      // label stays readable on hover.
+      a.title = link.label;
       a.href = link.href;
       if (link.kind === 'external') {
         a.target = '_blank';
@@ -604,17 +726,49 @@ const BOARD_JS = `
     return cell;
   }
 
+  // Status block: indicator lamp plus stencil word (warn/caut on asks, go on
+  // quiet rows), per the flight-ops contract.
+  function statCell(word) {
+    const s = el('span', 'stat');
+    s.appendChild(el('span', 'ind'));
+    s.appendChild(el('span', null, word));
+    return s;
+  }
+
+  // Labeled days-waiting meter: value, 0-14 track filling with the wait, and
+  // the tick at the 7-day limit.
+  function meterCell(card, a) {
+    const m = el('span', 'meter');
+    m.title = 'How long this has waited on you; the tick marks the 7-day limit';
+    const row1 = el('span', 'row1');
+    row1.appendChild(el('span', 'label', 'Days waiting'));
+    const val = el('span', 'val mono', a.days === null ? '\\u2014' : String(a.days));
+    val.title = card.updated;
+    row1.appendChild(val);
+    m.appendChild(row1);
+    const track = el('span', 'track');
+    const fill = el('i');
+    const pct = a.days === null ? 0 : Math.max(3, Math.min(100, Math.round((a.days / 14) * 100)));
+    fill.style.width = pct + '%';
+    track.appendChild(fill);
+    track.appendChild(el('em'));
+    m.appendChild(track);
+    const scale = el('span', 'scale mono');
+    for (const s of ['0', '7', '14']) scale.appendChild(el('span', null, s));
+    m.appendChild(scale);
+    return m;
+  }
+
   function askRow(card, child) {
-    const li = el('li', 'ask' + (child ? ' child' : ''));
+    const a = age(card.updated);
+    const li = el('li', 'ask' + (a.hot ? ' hot' : '') + (child ? ' child' : ''));
+    li.appendChild(statCell(a.hot ? 'warn' : 'caut'));
     li.appendChild(el('span', 'init', card.title));
     const ask = askOf(card);
     const what = el('span', 'what', ask.main);
     if (ask.sub) what.appendChild(el('small', null, ask.sub));
     li.appendChild(what);
-    const a = age(card.updated);
-    const ageEl = el('span', 'age' + (a.hot ? ' hot' : ''), a.label);
-    ageEl.title = card.updated;
-    li.appendChild(ageEl);
+    li.appendChild(meterCell(card, a));
     li.appendChild(actionCell(card));
     rowMenu(card, li);
     if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
@@ -625,8 +779,8 @@ const BOARD_JS = `
 
   function quietRow(card, child) {
     const li = el('li', child ? 'child' : null);
+    li.appendChild(statCell('go'));
     li.appendChild(el('span', 'init', card.title));
-    li.appendChild(el('span', 'dot run'));
     li.appendChild(el('span', null, firstLine(card.latest)));
     rowMenu(card, li);
     if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
@@ -710,6 +864,34 @@ const BOARD_JS = `
     }
   }
 
+  function zoneHeading(title, subtitle) {
+    const h = el('h2');
+    h.appendChild(el('span', 'tag stencil', title));
+    h.appendChild(el('small', 'mono', subtitle));
+    return h;
+  }
+
+  function lamp(cls, label, count, title) {
+    const d = el('div', 'lamp' + (cls ? ' ' + cls : ''));
+    d.title = title;
+    d.appendChild(document.createTextNode(label));
+    d.appendChild(el('b', null, String(count)));
+    return d;
+  }
+
+  // The caution-and-warning header panel: overdue (past the 7-day limit),
+  // needs-you, nominal, and stowed counts; a lamp lights only when its count
+  // is live, and the stowed lamp stays unlit per the contract.
+  function renderLamps(asks, quiet, shelf) {
+    const cw = document.getElementById('lamps');
+    cw.textContent = '';
+    const overdue = asks.filter((c) => age(c.updated).hot).length;
+    cw.appendChild(lamp(overdue ? 'warn' : '', 'Overdue', overdue, 'Waiting on you longer than the 7-day limit'));
+    cw.appendChild(lamp(asks.length ? 'caution' : '', 'Needs you', asks.length, 'Decisions and merges only you can do'));
+    cw.appendChild(lamp(quiet.length ? 'go' : '', 'Nominal', quiet.length, 'Crews working, nothing for you'));
+    cw.appendChild(lamp('', 'Stowed', shelf.length, 'Shelved until you re-engage'));
+  }
+
   // Cards arrive from /api/cards already in need order (asks first, oldest
   // ask first); the three zones are cut straight from that order.
   function render(cards) {
@@ -720,11 +902,10 @@ const BOARD_JS = `
     const asks = cards.filter((c) => zoneOf(c) === 0);
     const quiet = cards.filter((c) => zoneOf(c) === 1);
     const shelf = cards.filter((c) => zoneOf(c) === 2);
+    renderLamps(asks, quiet, shelf);
 
-    const askCount = asks.reduce((n, c) => n + Math.max(1, c.decisions.length), 0);
-    root.appendChild(el('p', 'zone-title', asks.length
-      ? 'Needs you \\u2014 ' + plural(askCount, 'ask') + ' across ' + plural(asks.length, 'initiative')
-      : 'Needs you \\u2014 nothing waiting on you'));
+    root.appendChild(zoneHeading('Needs you',
+      asks.length ? 'OLDEST FIRST \\u00b7 LIMIT 7 DAYS' : 'NOTHING WAITING ON YOU'));
     if (asks.length) {
       const ul = el('ul');
       for (const r of foldGroups(asks)) ul.appendChild(askRow(r.card, r.child));
@@ -732,8 +913,8 @@ const BOARD_JS = `
     }
 
     if (quiet.length) {
+      root.appendChild(zoneHeading('Nominal', 'CREWS WORKING \\u00b7 NOTHING FOR YOU'));
       const wrap = el('div', 'quiet');
-      wrap.appendChild(el('p', 'zone-title', 'Running quietly \\u2014 nothing for you'));
       const ul = el('ul');
       for (const r of foldGroups(quiet)) ul.appendChild(quietRow(r.card, r.child));
       wrap.appendChild(ul);
@@ -742,8 +923,7 @@ const BOARD_JS = `
 
     if (shelf.length) {
       const wrap = el('div', 'shelf');
-      wrap.appendChild(el('p', 'zone-title', 'Shelf \\u2014 ' + shelf.length + ' shelved, out of the way until you bring '
-        + (shelf.length === 1 ? 'it' : 'them') + ' back'));
+      wrap.appendChild(zoneHeading('Stowed', 'ONE CLICK BACK'));
       const ul = el('ul');
       for (const r of foldGroups(shelf)) ul.appendChild(shelfRow(r.card, r.child));
       wrap.appendChild(ul);
@@ -753,6 +933,13 @@ const BOARD_JS = `
     if (!cards.length) root.appendChild(el('div', 'empty', 'No initiatives yet.'));
     restoreFocus(focused);
   }
+
+  const shortToday = new Date()
+    .toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+  const flightDate = document.getElementById('flightdate');
+  if (flightDate) flightDate.textContent = shortToday;
+  const revPlate = document.getElementById('revplate');
+  if (revPlate) revPlate.textContent = 'PANEL REV C \\u00b7 ' + shortToday;
 
   async function refresh(force) {
     try {
@@ -775,12 +962,22 @@ function boardPage() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mission Control</title>
+<title>MISSION CONTROL — flight ops</title>
 <style>${PAGE_CSS}</style>
 </head>
 <body>
-<header class="top"><h1>Mission Control</h1></header>
-<div class="deck" id="board"></div>
+<div class="wrap">
+<header class="frame"><span class="fb"></span>
+  <div class="ident">
+    <h1><span class="stencil">Mission Control</span></h1>
+    <div class="met mono" id="flightdate"></div>
+  </div>
+  <div class="cw" id="lamps" role="status" aria-label="fleet status summary"></div>
+</header>
+<div class="subplate"><span>UNIT 01</span><span>ALL SYSTEMS REPORTING</span></div>
+<div id="board"></div>
+<footer class="plate"><span>FIRSTMATE</span><span class="go">GO FLIGHT</span><span id="revplate">PANEL REV C</span></footer>
+</div>
 <div id="toast" class="toast"></div>
 <script>${BOARD_JS}</script>
 </body>
@@ -860,8 +1057,11 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/cards') {
-      const pending = pendingCounts();
-      const cards = listCards().map((c) => ({ ...c, links: cardLinks(c), pending: pending.get(c.slug) || 0 }));
+      const pending = pendingEventsBySlug();
+      const cards = listCards().map((c) => {
+        const events = pending.get(c.slug) || [];
+        return { ...c, links: cardLinks(c), pending: events.length, pendingEvents: events };
+      });
       sendJson(res, 200, { cards });
       return;
     }
@@ -901,8 +1101,8 @@ const server = createServer(async (req, res) => {
       // action must share their epoch-ms and ts so the consumer can read a
       // same-kind same-timestamp burst as one captain action.
       const batchMs = Date.now();
-      for (const slug of new Set(slugs)) writeInboxEvent(action, slug, '', batchMs);
-      sendJson(res, 200, { ok: true });
+      const events = [...new Set(slugs)].map((slug) => writeInboxEvent(action, slug, '', batchMs));
+      sendJson(res, 200, { ok: true, events });
       return;
     }
     if (req.method === 'POST' && (url.pathname === '/api/message' || url.pathname === '/api/action')) {
@@ -927,22 +1127,23 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'invalid slug' });
         return;
       }
+      let event;
       if (url.pathname === '/api/message') {
         const text = typeof payload.text === 'string' ? payload.text.trim() : '';
         if (!text || text.length > MAX_MESSAGE_CHARS) {
           sendJson(res, 400, { error: 'invalid text' });
           return;
         }
-        writeInboxEvent('message', slug, text);
+        event = writeInboxEvent('message', slug, text);
       } else {
         const action = typeof payload.action === 'string' ? payload.action : '';
         if (!ACTIONS.has(action)) {
           sendJson(res, 400, { error: 'invalid action' });
           return;
         }
-        writeInboxEvent(action, slug, '');
+        event = writeInboxEvent(action, slug, '');
       }
-      sendJson(res, 200, { ok: true });
+      sendJson(res, 200, { ok: true, event });
       return;
     }
     const docMatch = req.method === 'GET' && url.pathname.match(/^\/doc\/([a-z0-9-]+)\/(\d{1,3})$/);
