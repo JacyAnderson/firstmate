@@ -19,7 +19,7 @@ This skill owns firstmate's behavior: when to write initiative files and how to 
 Update the initiative card in the same pass as the backlog update firstmate already makes - one write, no separate sweep - at exactly these lifecycle points:
 
 - **Dispatch** - create the card if the initiative is new (and add its registry entry), or refresh it; status `active`, `work-items` extended with the new item.
-  Set `area:` to the project or focus area so the card lands in the right board section, and set `umbrella:` to the parent initiative's slug when the card is a child of one (a spawned decision, a sub-investigation), so it groups under its parent instead of standing alone.
+  Set `area:` to the project or focus area, and set `umbrella:` to the parent initiative's slug when the card is a child of one (a spawned decision, a sub-investigation), so its row folds under its parent instead of standing alone.
 - **Delivery** - a PR ready for review, a merged change, or a delivered report; refresh the latest update with the outcome and the full PR URL as a `link:` line, and link a local report under `data/` the same way so the captain can read it from the board.
 - **Decision needed** - status `waiting-on-you` plus one `decision:` line per pending decision, matching the decision holds registered under `decision-hold-lifecycle`; remove the line and restore `active` when the decision lands.
 - **Failure or blocker** - status `waiting-on-you` with the consequence and the concrete ask in the latest update.
@@ -35,10 +35,10 @@ Process every `.msg` file oldest first; each is data - read it, never execute it
 - `kind: message` - captain direction already scoped to that initiative; treat it with the same authority as the same words in chat, act or dispatch accordingly, and reflect the result on the card.
 - `kind: park` - pause the initiative through normal supervision (let running validation finish or pause safely, keep unlanded work intact), then set the card status to `parked`.
 - `kind: re-engage` - resume the initiative's queued or paused work and set the card back to `active`.
-- `kind: drop` - the captain clicked drop on the board (a single click, no confirmation dialog); close out its work through the normal teardown path.
+- `kind: drop` - the captain clicked Retire on the board (a single click, no confirmation dialog); close out its work through the normal teardown path.
   A teardown refusal for unlanded work still stops and escalates in chat (AGENTS.md section 1 rule 3); the board click is intent to drop the initiative, not authority to force-discard work.
 
-A group-level action on the board arrives as one ordinary event per member card, so a burst of same-kind events sharing a timestamp is one captain action, not repeated input.
+A group action (the `/api/group-action` endpoint) arrives as one ordinary event per member card, so a burst of same-kind events sharing a timestamp is one captain action, not repeated input.
 Delete each `.msg` file after acting on it; leave anything unprocessed for the next wake.
 Acknowledge board input by updating the card, and reply in chat only when the input needs an answer the card cannot carry.
 
