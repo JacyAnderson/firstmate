@@ -42,6 +42,49 @@ let inboxSeq = 0;
 
 // --- initiative parsing ------------------------------------------------------
 
+// A bare `link: <target>` line carries no label, so the action chip would
+// otherwise echo the raw URL; derive a label naming what the link opens.
+// An explicit `link: <label> <target>` label always wins over this.
+function deriveLinkLabel(target) {
+  const plain = (s) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  };
+  if (!/^https?:\/\//.test(target)) {
+    // A local doc target reads as its file name.
+    const name = target.split('/').filter(Boolean).pop();
+    return name ? plain(name) : target;
+  }
+  let url;
+  try {
+    url = new URL(target);
+  } catch {
+    return target.replace(/^https?:\/\//, '');
+  }
+  const segs = url.pathname.split('/').filter(Boolean).map(plain);
+  const last = segs[segs.length - 1] || '';
+  const prev = segs[segs.length - 2] || '';
+  if (/^\d+$/.test(last)) {
+    if (prev === 'pull' || prev === 'pulls') return `PR #${last}`;
+    if (prev === 'merge_requests') return `MR ${last}`;
+    if (prev === 'issues') return `Issue #${last}`;
+  }
+  if (segs.includes('blob') && last) return last;
+  if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]') {
+    if (url.port === String(PORT)) return 'Board';
+    if (segs[0] === 'session') return 'Review app';
+    return url.host;
+  }
+  // A repository root (owner/repo, or a group/project pair) reads as the
+  // project name; anything deeper or unrecognized falls back to the bare
+  // hostname. The scheme is never rendered.
+  if (segs.length && segs.length <= 2 && !/^\d+$/.test(last)) return last;
+  return url.hostname;
+}
+
 function parseInitiative(slug, raw) {
   const card = {
     slug,
@@ -53,8 +96,10 @@ function parseInitiative(slug, raw) {
     priority: null,
     workItems: [],
     decisions: [],
+    decisionContexts: [],
     links: [],
     latest: '',
+    context: '',
   };
   let body = raw;
   if (raw.startsWith('---\n')) {
@@ -65,7 +110,20 @@ function parseInitiative(slug, raw) {
       // newline; the card body is then empty rather than the raw frontmatter.
       const afterClose = raw.indexOf('\n', end + 1);
       body = afterClose === -1 ? '' : raw.slice(afterClose + 1);
+      let openDecision = -1;
       for (const line of front.split('\n')) {
+        // Indented lines immediately under a `decision:` line form that
+        // decision's optional multi-line context body; any other line ends
+        // the run, and indented lines elsewhere stay ignored as before.
+        if (/^\s/.test(line)) {
+          const text = line.trim();
+          if (text && openDecision !== -1) {
+            const prev = card.decisionContexts[openDecision];
+            card.decisionContexts[openDecision] = prev ? `${prev}\n${text}` : text;
+          }
+          continue;
+        }
+        openDecision = -1;
         const m = line.match(/^([a-z-]+):\s*(.*)$/);
         if (!m) continue;
         const [, key, value] = m;
@@ -77,17 +135,34 @@ function parseInitiative(slug, raw) {
         else if (key === 'umbrella') card.umbrella = SLUG_RE.test(value) ? value : '';
         else if (key === 'priority') card.priority = /^[0-4]$/.test(value) ? Number(value) : null;
         else if (key === 'work-items') card.workItems = value.split(',').map((s) => s.trim()).filter(Boolean);
-        else if (key === 'decision') card.decisions.push(value);
+        else if (key === 'decision') {
+          card.decisions.push(value);
+          card.decisionContexts.push('');
+          openDecision = card.decisions.length - 1;
+        }
         else if (key === 'link') {
           const target = value.replace(/\s+$/, '').split(/\s+/).pop();
-          const label = value.slice(0, value.lastIndexOf(target)).trim() || target;
+          const label = value.slice(0, value.lastIndexOf(target)).trim() || deriveLinkLabel(target);
           card.links.push({ label, target });
         }
       }
     }
   }
-  const historyAt = body.indexOf('\n## History');
-  card.latest = (historyAt === -1 ? body : body.slice(0, historyAt)).trim();
+  // The latest update is the body above its first `## Context` or
+  // `## History` heading; `## Context` carries the latest update's optional
+  // context body, and `## History` stays unrendered.
+  const nb = `\n${body}`;
+  const ctxAt = nb.indexOf('\n## Context');
+  const histAt = nb.indexOf('\n## History');
+  const cuts = [ctxAt, histAt].filter((i) => i !== -1);
+  card.latest = (cuts.length ? nb.slice(0, Math.min(...cuts)) : nb).trim();
+  if (ctxAt !== -1) {
+    const headEnd = nb.indexOf('\n', ctxAt + 1);
+    let ctx = headEnd === -1 ? '' : nb.slice(headEnd + 1);
+    const next = `\n${ctx}`.indexOf('\n## ');
+    if (next !== -1) ctx = ctx.slice(0, Math.max(0, next - 1));
+    card.context = ctx.trim();
+  }
   return card;
 }
 
@@ -469,6 +544,21 @@ const PAGE_CSS = `
   .note textarea{flex:1;min-height:34px;max-height:120px;resize:vertical;border:1px solid var(--etch);
     background:var(--lamp-off);color:var(--white);padding:6px 10px;font:inherit;font-size:.9rem;}
 
+  /* collapsed context panel: a stencil disclosure on rows whose card carries
+     context bodies; expanding shows them inside the row, in-skin */
+  .ctxbtn{border:none;background:none;color:var(--stencil);cursor:pointer;padding:2px 0 0;display:block;
+    font:600 .6rem/1.4 "Avenir Next Condensed","Arial Narrow",sans-serif;letter-spacing:.16em;text-transform:uppercase;}
+  .ctxbtn::before{content:"▸ ";}
+  .ctxbtn.open::before{content:"▾ ";}
+  .ctxbtn:hover{color:var(--caution);}
+  .ctx{grid-column:2/-1;margin:2px 0 6px;padding:8px 12px 9px;border:1px solid var(--etch);
+    border-left:2px solid var(--stencil);background:var(--panel2);color:var(--ghost);font-size:.85rem;min-width:0;}
+  li.ask .ctx{margin-right:14px;}
+  .shelf .ctx{grid-column:1/-1;}
+  .ctx div+div{margin-top:8px;}
+  .ctx b{display:block;color:var(--white);font-weight:600;}
+  .ctx p{margin:0;white-space:pre-line;overflow-wrap:break-word;}
+
   /* queued-for-pickup send feedback */
   .sent{grid-column:3/-1;font-size:.78rem;color:var(--go);padding-top:2px;letter-spacing:.06em;
     text-transform:uppercase;font-family:ui-monospace,"SF Mono",Menlo,monospace;}
@@ -504,9 +594,10 @@ const BOARD_JS = `
   const POLL_MS = 5000;
   let lastPayload = '';
   let lastCards = [];
-  // Open note editors, unsent drafts, the open menu, and this session's
-  // send confirmations survive re-renders.
+  // Open note editors, expanded context panels, unsent drafts, the open
+  // menu, and this session's send confirmations survive re-renders.
   const openNotes = new Set();
+  const openContexts = new Set();
   const drafts = {};
   const confirmations = new Map();
   let openMenu = '';
@@ -708,6 +799,42 @@ const BOARD_JS = `
     return { main: firstLine(card.latest) || 'Waiting on you', sub: '' };
   }
 
+  // Optional context bodies (docs/mission-control.md "Initiative file
+  // schema"): each decision may carry one, and the latest update may carry
+  // one under "## Context". Rows without any render exactly as before.
+  function contextEntries(card) {
+    const out = [];
+    const ctxs = card.decisionContexts || [];
+    (card.decisions || []).forEach((d, i) => {
+      if (ctxs[i]) out.push({ title: card.decisions.length > 1 ? d : '', body: ctxs[i] });
+    });
+    if (card.context) out.push({ title: '', body: card.context });
+    return out;
+  }
+
+  function contextToggle(card) {
+    const open = openContexts.has(card.slug);
+    const b = el('button', 'ctxbtn' + (open ? ' open' : ''), 'Context');
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (open) openContexts.delete(card.slug); else openContexts.add(card.slug);
+      render(lastCards);
+    };
+    return b;
+  }
+
+  function contextPanel(entries) {
+    const box = el('div', 'ctx');
+    for (const entry of entries) {
+      const d = el('div');
+      if (entry.title) d.appendChild(el('b', null, entry.title));
+      d.appendChild(el('p', null, entry.body));
+      box.appendChild(d);
+    }
+    return box;
+  }
+
   function actionCell(card) {
     const cell = el('span');
     const link = card.links[0];
@@ -767,10 +894,13 @@ const BOARD_JS = `
     const ask = askOf(card);
     const what = el('span', 'what', ask.main);
     if (ask.sub) what.appendChild(el('small', null, ask.sub));
+    const ctx = contextEntries(card);
+    if (ctx.length) what.appendChild(contextToggle(card));
     li.appendChild(what);
     li.appendChild(meterCell(card, a));
     li.appendChild(actionCell(card));
     rowMenu(card, li);
+    if (ctx.length && openContexts.has(card.slug)) li.appendChild(contextPanel(ctx));
     if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
     const fb = feedbackLine(card);
     if (fb) li.appendChild(fb);
@@ -781,8 +911,12 @@ const BOARD_JS = `
     const li = el('li', child ? 'child' : null);
     li.appendChild(statCell('go'));
     li.appendChild(el('span', 'init', card.title));
-    li.appendChild(el('span', null, firstLine(card.latest)));
+    const line = el('span', null, firstLine(card.latest));
+    const ctx = contextEntries(card);
+    if (ctx.length) line.appendChild(contextToggle(card));
+    li.appendChild(line);
     rowMenu(card, li);
+    if (ctx.length && openContexts.has(card.slug)) li.appendChild(contextPanel(ctx));
     if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
     const fb = feedbackLine(card);
     if (fb) li.appendChild(fb);
@@ -794,13 +928,17 @@ const BOARD_JS = `
     li.appendChild(el('span', 'init', card.title));
     const line = firstLine(card.latest);
     const when = shortDate(card.updated);
-    li.appendChild(el('span', null, line + (when ? (line ? '; ' : '') + 'shelved ' + when : '')));
+    const text = el('span', null, line + (when ? (line ? '; ' : '') + 'shelved ' + when : ''));
+    const ctx = contextEntries(card);
+    if (ctx.length) text.appendChild(contextToggle(card));
+    li.appendChild(text);
     const cell = el('span');
     const re = el('button', 'btn', 'Re-engage');
     re.onclick = () => act(card.slug, 're-engage', 'Re-engage queued \\u2014 picked up on the next pass', re);
     cell.appendChild(re);
     li.appendChild(cell);
     rowMenu(card, li);
+    if (ctx.length && openContexts.has(card.slug)) li.appendChild(contextPanel(ctx));
     if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
     const fb = feedbackLine(card);
     if (fb) li.appendChild(fb);

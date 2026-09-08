@@ -35,11 +35,16 @@ area: acme-web
 priority: 1
 work-items: login-flake-f3, login-flake-audit-a1
 decision: Should Safari 16 stay supported?
+  Safari 16 is the last version that runs on macOS Big Sur.
+  Dropping it loses about 2% of sessions but removes the legacy polyfill burden.
 link: fix PR https://github.com/acme/web/pull/412
 link: investigation report data/login-flake-audit-a1/report.md
 ---
 The fix is in review with checks passing.
 One decision is waiting on you: whether Safari 16 stays supported.
+
+## Context
+The flake traced to a race in session refresh that only legacy Safari's timer throttling exposes.
 
 ## History
 - 2026-08-26T17:40:00Z: fix PR opened, checks green
@@ -59,11 +64,15 @@ Frontmatter is a block of `key: value` lines between two `---` lines, parsed lin
 - `priority` (optional) - the backlog priority 0-4 (0 most urgent), copied from the backlog item when present; card data only, no longer part of the ordering rule below.
 - `work-items` (optional) - comma-separated backlog item ids linked to this initiative.
 - `decision` (optional, repeatable) - one pending captain decision per line; the first leads the row's ask text on the board, and any decision line places the card in the needs-you zone.
+  Indented lines immediately under a `decision:` line form that decision's optional multi-line context body, shown on the board as a collapsed panel expandable on click; any non-indented line ends the body.
 - `link` (optional, repeatable) - `<label> <target>`, where the target is the last whitespace-separated token and the label is everything before it.
+  The label is optional: a bare `link: <target>` line gets a label derived from the target - `PR #<n>`, `MR <n>`, or `Issue #<n>` from a pull-request, merge-request, or issue URL, the file name from a blob URL or local doc path, the project name from a repository-root URL, `Board` or `Review app` from a local URL on this board's own port or a review-session path, and otherwise the bare hostname, never the scheme.
+  An explicit label always wins over that derivation.
   A target starting with `https://` or `http://` renders as an external link (a PR, an MR, a dashboard).
   Any other target is a path relative to the home that must resolve under `data/`; the board renders that markdown file as HTML itself, so acting on a card never requires the terminal.
 
-The body above the first `## History` heading is the latest update: two to three sentences in plain outcome language (AGENTS.md section 9), no internal vocabulary.
+The body above the first `## Context` or `## History` heading is the latest update: two to three sentences in plain outcome language (AGENTS.md section 9), no internal vocabulary.
+An optional `## Context` section (up to the next `## ` heading) is the latest update's own multi-line context body, shown in the same collapsed panel as decision context.
 The `## History` section is the running history, newest entry first; phase 1 keeps it in the file without rendering it on the card.
 
 ## Registry format
@@ -108,7 +117,7 @@ A request target that fails URL parsing is refused with 400 rather than taking t
 A POST body that does not parse as a JSON object (malformed JSON, `null`, a string, an array) is refused with 400 before any field is read.
 
 - `GET /` - the board page; it polls for card updates itself, so the captain refreshes nothing manually.
-- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), `latest` (the latest-update text), `pending` (the count of the card's queued, not-yet-consumed inbox events), and `pendingEvents` (those events' file names, so a client can track its own submission until consumption).
+- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `decisionContexts` (context bodies aligned index-for-index with `decisions`, empty string when a decision has none), `links` (each `{label, href, kind}` with `kind` `external` or `doc`), `latest` (the latest-update text), `context` (the latest update's context body, empty when none), `pending` (the count of the card's queued, not-yet-consumed inbox events), and `pendingEvents` (those events' file names, so a client can track its own submission until consumption).
   The array is sorted by the ordering rule below; consumers may rely on that order.
 - `POST /api/message` - JSON `{"slug", "text"}`; appends a `message` inbox event and returns its file name as `event`; 400 on an invalid slug or empty text.
 - `POST /api/action` - JSON `{"slug", "action"}` with action `park`, `re-engage`, or `drop`; appends the matching inbox event and returns its file name as `event`; 400 otherwise.
@@ -137,6 +146,7 @@ The board (the owner-approved flight-ops rendering) opens with a caution-and-war
 - **Nominal** - one-liner rows for active initiatives with no ask: go lamp, title, latest-update snippet, and the menu.
 - **Stowed** - a dashed box of dimmed one-liners for parked initiatives, each with a Re-engage button and its shelved date from `updated:`.
 
+A row whose card carries any context body shows a collapsed Context disclosure that expands the bodies inside the row; rows without context render exactly as before.
 Every row's menu offers Send a note (opens the per-initiative message box, a `message` event), Shelve (a `park` event, omitted on already-shelved rows), and Retire (a `drop` event, one click).
 Submitting any input clears it immediately (a failed write restores the note text), keeps the control disabled while the write is in flight, and confirms inline on the row with a queued-for-pickup line that stays until firstmate consumes the event file; the wording is deliberately honest that pickup happens on the next pass, not instantly.
 A session's confirmation is tied to the event id its own submit returned: it clears when that event is consumed even if other events for the card remain queued, and queued events another session submitted show neutral queued wording instead of "Sent".
