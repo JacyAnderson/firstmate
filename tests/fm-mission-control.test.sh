@@ -163,8 +163,8 @@ pass "board page renders"
 # kinds, one-click retire with no confirmation anywhere, and the in-flight
 # double-click guard.
 assert_contains "$out" "Needs you" "needs-you zone rendered"
-assert_contains "$out" "Running quietly" "quiet zone rendered"
-assert_contains "$out" "Shelf" "shelf zone rendered"
+assert_contains "$out" "Nominal" "nominal (quiet) zone rendered"
+assert_contains "$out" "Stowed" "stowed (shelf) zone rendered"
 assert_contains "$out" "'Send a note'" "menu offers send a note"
 assert_contains "$out" "act(card.slug, 'park'" "shelve is wired to the park event"
 assert_contains "$out" "act(card.slug, 'drop'" "retire is wired to the drop event"
