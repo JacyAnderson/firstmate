@@ -137,8 +137,8 @@ The board (the owner-approved Command Deck rendering) cuts three zones straight 
 - **Running quietly** - one-liner rows for active initiatives with no ask: title, status dot, latest-update snippet, and the menu.
 - **Shelf** - a dashed box of dimmed one-liners for parked initiatives, each with a Re-engage button and its shelved date from `updated:`.
 
-Every row's menu offers Send a note (opens the per-initiative message box, a `message` event), Shelve (a `park` event), and Retire (a `drop` event, one click).
-Submitting any input clears it immediately, keeps the control disabled while the write is in flight, and confirms inline on the row with a queued-for-pickup chip that stays until firstmate consumes the event file; the wording is deliberately honest that pickup happens on the next pass, not instantly.
+Every row's menu offers Send a note (opens the per-initiative message box, a `message` event), Shelve (a `park` event, omitted on already-shelved rows), and Retire (a `drop` event, one click).
+Submitting any input clears it immediately (a failed write restores the note text), keeps the control disabled while the write is in flight, and confirms inline on the row with a queued-for-pickup chip that stays until firstmate consumes the event file; the wording is deliberately honest that pickup happens on the next pass, not instantly.
 Umbrella children fold indented under their parent's row within a zone; a child whose parent sits in another zone renders as its own row, so an ask is never hidden inside a quiet group.
 Work items stay card data and never render as their own rows, which keeps the board calm at ten initiatives.
 
