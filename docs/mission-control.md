@@ -108,11 +108,11 @@ A request target that fails URL parsing is refused with 400 rather than taking t
 A POST body that does not parse as a JSON object (malformed JSON, `null`, a string, an array) is refused with 400 before any field is read.
 
 - `GET /` - the board page; it polls for card updates itself, so the captain refreshes nothing manually.
-- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), `latest` (the latest-update text), and `pending` (the count of the card's queued, not-yet-consumed inbox events, derived from the inbox file names).
+- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), `latest` (the latest-update text), `pending` (the count of the card's queued, not-yet-consumed inbox events), and `pendingEvents` (those events' file names, so a client can track its own submission until consumption).
   The array is sorted by the ordering rule below; consumers may rely on that order.
-- `POST /api/message` - JSON `{"slug", "text"}`; appends a `message` inbox event; 400 on an invalid slug or empty text.
-- `POST /api/action` - JSON `{"slug", "action"}` with action `park`, `re-engage`, or `drop`; appends the matching inbox event; 400 otherwise.
-- `POST /api/group-action` - JSON `{"slugs": [...], "action"}` with the same three actions; appends one ordinary per-slug inbox event for each listed slug, so group actions need no new inbox kind and membership is fixed by the explicit list the caller sent - a card that joins the group later is never swept in.
+- `POST /api/message` - JSON `{"slug", "text"}`; appends a `message` inbox event and returns its file name as `event`; 400 on an invalid slug or empty text.
+- `POST /api/action` - JSON `{"slug", "action"}` with action `park`, `re-engage`, or `drop`; appends the matching inbox event and returns its file name as `event`; 400 otherwise.
+- `POST /api/group-action` - JSON `{"slugs": [...], "action"}` with the same three actions; appends one ordinary per-slug inbox event for each listed slug (returning their file names as `events`), so group actions need no new inbox kind and membership is fixed by the explicit list the caller sent - a card that joins the group later is never swept in.
   The whole batch is validated first (every slug valid, 1-200 entries); any bad entry is 400 with nothing written, and duplicate slugs collapse to one event.
 - `GET /doc/<slug>/<n>` - renders the initiative's n-th local `link:` target as HTML.
   The path comes from the server's own parse of the initiative file, never from the client, and must resolve (symlinks included) under the home's `data/` directory; anything else is 404.
@@ -139,6 +139,7 @@ The board (the owner-approved Command Deck rendering) cuts three zones straight 
 
 Every row's menu offers Send a note (opens the per-initiative message box, a `message` event), Shelve (a `park` event, omitted on already-shelved rows), and Retire (a `drop` event, one click).
 Submitting any input clears it immediately (a failed write restores the note text), keeps the control disabled while the write is in flight, and confirms inline on the row with a queued-for-pickup chip that stays until firstmate consumes the event file; the wording is deliberately honest that pickup happens on the next pass, not instantly.
+A session's confirmation is tied to the event id its own submit returned: it clears when that event is consumed even if other events for the card remain queued, and queued events another session submitted show neutral queued wording instead of "Sent".
 Umbrella children fold indented under their parent's row within a zone; a child whose parent sits in another zone renders as its own row, so an ask is never hidden inside a quiet group.
 Work items stay card data and never render as their own rows, which keeps the board calm at ten initiatives.
 

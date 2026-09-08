@@ -171,31 +171,36 @@ function cardLinks(card) {
   });
 }
 
-// Queued, not-yet-consumed inbox events per slug, counted from the inbox file
+// Queued, not-yet-consumed inbox events per slug, read from the inbox file
 // names (`<epoch-ms>-<seq>-<slug>.msg`; docs/mission-control.md "Inbox event
-// format"). The board renders this as the queued-for-pickup chip, which
-// disappears once firstmate consumes (deletes) the event file.
-function pendingCounts() {
-  const counts = new Map();
+// format"). The board shows queued-for-pickup feedback from this, and each
+// submitting session tracks its own event id (the file name, returned by the
+// POST) so a confirmation never outlives its own event or claims another
+// session's; it disappears once firstmate consumes (deletes) the file.
+function pendingEventsBySlug() {
+  const events = new Map();
   let names = [];
   try {
     names = readdirSync(INBOX_DIR);
   } catch {
-    return counts;
+    return events;
   }
-  for (const name of names) {
+  for (const name of names.sort()) {
     if (!name.endsWith('.msg')) continue;
     const parts = name.slice(0, -4).split('-');
     if (parts.length < 3 || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1])) continue;
     const slug = parts.slice(2).join('-');
     if (!SLUG_RE.test(slug)) continue;
-    counts.set(slug, (counts.get(slug) || 0) + 1);
+    if (!events.has(slug)) events.set(slug, []);
+    events.get(slug).push(name);
   }
-  return counts;
+  return events;
 }
 
 // --- inbox writes ------------------------------------------------------------
 
+// Returns the event file name, which doubles as the event id in POST
+// responses so a client can track its own submission's consumption.
 function writeInboxEvent(kind, slug, text, epochMs = Date.now()) {
   mkdirSync(INBOX_DIR, { recursive: true });
   inboxSeq = (inboxSeq + 1) % 10000;
@@ -203,6 +208,7 @@ function writeInboxEvent(kind, slug, text, epochMs = Date.now()) {
   const body = kind === 'message' ? `\n${text.trim()}\n` : '\n';
   const content = `kind: ${kind}\nslug: ${slug}\nts: ${new Date(epochMs).toISOString()}\n${body}`;
   writeFileSync(join(INBOX_DIR, name), content, { flag: 'wx', mode: 0o600 });
+  return name;
 }
 
 // --- markdown rendering ------------------------------------------------------
@@ -424,6 +430,7 @@ const BOARD_JS = `
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('request failed');
+    return res.json();
   }
 
   function firstLine(text) {
@@ -449,13 +456,17 @@ const BOARD_JS = `
   }
 
   // A successful send confirms on the row right away: the confirmation text
-  // is remembered per slug, the local card's pending count is bumped so the
-  // queued-for-pickup chip shows before the next poll, and the server's own
-  // pending count takes over from the forced refresh onward.
-  function noteQueued(slug, text) {
-    confirmations.set(slug, text);
+  // and the submitted event's id are remembered per slug, the local card's
+  // pending state is bumped so the queued-for-pickup line shows before the
+  // next poll, and the server's own pending events take over from the forced
+  // refresh onward.
+  function noteQueued(slug, text, event) {
+    confirmations.set(slug, { text, event: event || '' });
     const card = lastCards.find((c) => c.slug === slug);
-    if (card) card.pending = (card.pending || 0) + 1;
+    if (card) {
+      card.pendingEvents = (card.pendingEvents || []).concat(event || []);
+      card.pending = (card.pending || 0) + 1;
+    }
     render(lastCards);
     refresh(true);
   }
@@ -466,9 +477,9 @@ const BOARD_JS = `
   async function act(slug, action, doneMsg, btn) {
     if (btn) btn.disabled = true;
     try {
-      await post('/api/action', { slug, action });
+      const r = await post('/api/action', { slug, action });
       toast(doneMsg);
-      noteQueued(slug, doneMsg);
+      noteQueued(slug, doneMsg, r && r.event);
     } catch {
       toast('Could not send \\u2014 try again.');
       if (btn) btn.disabled = false;
@@ -477,18 +488,23 @@ const BOARD_JS = `
 
   // The queued-for-pickup line stays on the row while the initiative has
   // unconsumed inbox events, and honestly says pickup happens on the next
-  // pass, not instantly; it disappears once the event files are consumed.
+  // pass, not instantly. A confirmation is tied to its own submitted event
+  // id: once that event is consumed the confirmation goes with it, and other
+  // sessions' queued events show neutral wording instead of claiming "Sent".
   function feedbackLine(card) {
-    const msg = confirmations.get(card.slug);
+    const entry = confirmations.get(card.slug);
+    const queued = card.pendingEvents || [];
+    if (entry && entry.event && !queued.includes(entry.event)) confirmations.delete(card.slug);
     if (!card.pending) {
-      if (msg) confirmations.delete(card.slug);
+      confirmations.delete(card.slug);
       return null;
     }
+    const mine = confirmations.get(card.slug);
     const box = el('div', 'sent');
     const chip = el('span', 'chip-queued', 'queued for pickup');
     chip.title = 'Queued \\u2014 picked up on the next pass, not instant.';
     box.appendChild(chip);
-    box.appendChild(el('span', null, msg || 'Sent \\u2014 picked up on the next pass'));
+    box.appendChild(el('span', null, mine ? mine.text : 'Queued \\u2014 picked up on the next pass'));
     return box;
   }
 
@@ -556,10 +572,10 @@ const BOARD_JS = `
       delete drafts[card.slug];
       send.disabled = true;
       try {
-        await post('/api/message', { slug: card.slug, text });
+        const r = await post('/api/message', { slug: card.slug, text });
         openNotes.delete(card.slug);
         toast('Note sent \\u2014 queued for pickup.');
-        noteQueued(card.slug, 'Note sent \\u2014 queued for pickup on the next pass');
+        noteQueued(card.slug, 'Note sent \\u2014 queued for pickup on the next pass', r && r.event);
       } catch {
         ta.value = text;
         drafts[card.slug] = text;
@@ -860,8 +876,11 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/cards') {
-      const pending = pendingCounts();
-      const cards = listCards().map((c) => ({ ...c, links: cardLinks(c), pending: pending.get(c.slug) || 0 }));
+      const pending = pendingEventsBySlug();
+      const cards = listCards().map((c) => {
+        const events = pending.get(c.slug) || [];
+        return { ...c, links: cardLinks(c), pending: events.length, pendingEvents: events };
+      });
       sendJson(res, 200, { cards });
       return;
     }
@@ -901,8 +920,8 @@ const server = createServer(async (req, res) => {
       // action must share their epoch-ms and ts so the consumer can read a
       // same-kind same-timestamp burst as one captain action.
       const batchMs = Date.now();
-      for (const slug of new Set(slugs)) writeInboxEvent(action, slug, '', batchMs);
-      sendJson(res, 200, { ok: true });
+      const events = [...new Set(slugs)].map((slug) => writeInboxEvent(action, slug, '', batchMs));
+      sendJson(res, 200, { ok: true, events });
       return;
     }
     if (req.method === 'POST' && (url.pathname === '/api/message' || url.pathname === '/api/action')) {
@@ -927,22 +946,23 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: 'invalid slug' });
         return;
       }
+      let event;
       if (url.pathname === '/api/message') {
         const text = typeof payload.text === 'string' ? payload.text.trim() : '';
         if (!text || text.length > MAX_MESSAGE_CHARS) {
           sendJson(res, 400, { error: 'invalid text' });
           return;
         }
-        writeInboxEvent('message', slug, text);
+        event = writeInboxEvent('message', slug, text);
       } else {
         const action = typeof payload.action === 'string' ? payload.action : '';
         if (!ACTIONS.has(action)) {
           sendJson(res, 400, { error: 'invalid action' });
           return;
         }
-        writeInboxEvent(action, slug, '');
+        event = writeInboxEvent(action, slug, '');
       }
-      sendJson(res, 200, { ok: true });
+      sendJson(res, 200, { ok: true, event });
       return;
     }
     const docMatch = req.method === 'GET' && url.pathname.match(/^\/doc\/([a-z0-9-]+)\/(\d{1,3})$/);

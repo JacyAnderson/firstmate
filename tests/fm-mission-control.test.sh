@@ -280,7 +280,10 @@ pass "captain input lands as inbox event files"
 
 # /api/cards reports each card's queued, not-yet-consumed inbox events (docs/
 # mission-control.md "Server wire contract"), so the board's queued-for-pickup
-# chip appears after a send and disappears once firstmate consumes the file.
+# feedback appears after a send and disappears once firstmate consumes the
+# file. Each POST returns its event's file name, and pendingEvents lists the
+# queued names, so a session can track exactly its own submission: consuming
+# one of two queued events removes only that id while the count follows.
 curl -sf "$BASE/api/cards" | python3 -c '
 import json, sys
 
@@ -289,18 +292,36 @@ assert cards["fix-login-flakes"]["pending"] == 1, "message not counted as pendin
 assert cards["deploy-pipeline"]["pending"] == 1, "action not counted as pending"
 assert cards["study"]["pending"] == 0, "card without queued input not zero"
 ' || fail "/api/cards pending counts are wrong after sends"
-curl -sf -X POST "$BASE/api/action" -H 'content-type: application/json' \
-  -d '{"slug":"stub-card","action":"park"}' > /dev/null || fail "park post failed"
-pending=$(curl -sf "$BASE/api/cards" | python3 -c '
-import json, sys
-print({c["slug"]: c for c in json.load(sys.stdin)["cards"]}["stub-card"]["pending"])')
-[ "$pending" = 1 ] || fail "stub-card pending is $pending after a send, expected 1"
-rm -f "$INBOX"/*-stub-card.msg
+event_a=$(curl -sf -X POST "$BASE/api/action" -H 'content-type: application/json' \
+  -d '{"slug":"stub-card","action":"park"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["event"])') \
+  || fail "park post failed or returned no event id"
+[ -f "$INBOX/$event_a" ] || fail "returned event id $event_a does not name the queued file"
+event_b=$(curl -sf -X POST "$BASE/api/message" -H 'content-type: application/json' \
+  -d '{"slug":"stub-card","text":"second session input"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["event"])') \
+  || fail "message post failed or returned no event id"
+curl -sf "$BASE/api/cards" | EVENT_A="$event_a" EVENT_B="$event_b" python3 -c '
+import json, os, sys
+
+card = {c["slug"]: c for c in json.load(sys.stdin)["cards"]}["stub-card"]
+assert card["pending"] == 2, f"pending {card['"'"'pending'"'"']} != 2"
+assert os.environ["EVENT_A"] in card["pendingEvents"], "first event id missing from pendingEvents"
+assert os.environ["EVENT_B"] in card["pendingEvents"], "second event id missing from pendingEvents"
+' || fail "pendingEvents does not list the returned event ids"
+rm -f "$INBOX/$event_a"
+curl -sf "$BASE/api/cards" | EVENT_A="$event_a" EVENT_B="$event_b" python3 -c '
+import json, os, sys
+
+card = {c["slug"]: c for c in json.load(sys.stdin)["cards"]}["stub-card"]
+assert card["pending"] == 1, f"pending {card['"'"'pending'"'"']} != 1 after one consumption"
+assert os.environ["EVENT_A"] not in card["pendingEvents"], "consumed event id still listed"
+assert os.environ["EVENT_B"] in card["pendingEvents"], "unconsumed event id dropped"
+' || fail "per-event consumption not reflected in pendingEvents"
+rm -f "$INBOX/$event_b"
 pending=$(curl -sf "$BASE/api/cards" | python3 -c '
 import json, sys
 print({c["slug"]: c for c in json.load(sys.stdin)["cards"]}["stub-card"]["pending"])')
 [ "$pending" = 0 ] || fail "stub-card pending is $pending after consumption, expected 0"
-pass "pending counts appear on send and clear when the event file is consumed"
+pass "each send returns its event id and pendingEvents tracks it to consumption"
 
 # --- group actions ----------------------------------------------------------------
 
