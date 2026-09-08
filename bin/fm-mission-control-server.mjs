@@ -428,6 +428,10 @@ const PAGE_CSS = `
   .menu{position:absolute;right:10px;top:44px;z-index:9;background:var(--panel2);border:1px solid var(--etch);
     box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:230px;padding:6px;display:none;}
   .menu.open{display:block;}
+  /* Deliberate deviation from the approved-skin contract: rows omit its
+     overflow:hidden and the row owning an open menu is raised, because the
+     powerup filter animation creates stacking contexts that would otherwise
+     clip or cover the open menu (browser-verified). */
   li:has(> .menu.open){z-index:10;}
   .menu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--white);
     font:500 .9rem/1.4 inherit;padding:8px 10px;cursor:pointer;}
