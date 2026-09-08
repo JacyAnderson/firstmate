@@ -390,8 +390,12 @@ const PAGE_CSS = `
   @keyframes blink{0%,92%{opacity:1}96%{opacity:.3}100%{opacity:1}}
   @media (prefers-reduced-motion: reduce){li.ask.hot .stat .ind{animation:none}}
 
-  li.ask .init{font-weight:650;font-size:.95rem;}
-  li.ask .what{color:var(--white);}
+  /* grid cells default to min-width:auto, which lets a long label or word
+     force the row past the viewport; cap them so content truncates or wraps
+     inside the row instead. */
+  li.ask>span,.quiet li>span,.shelf li>span{min-width:0;}
+  li.ask .init{font-weight:650;font-size:.95rem;overflow-wrap:break-word;}
+  li.ask .what{color:var(--white);overflow-wrap:break-word;}
   li.ask .what small{display:block;color:var(--ghost);font-size:.85rem;}
 
   /* labeled days-waiting meter */
@@ -410,7 +414,7 @@ const PAGE_CSS = `
   .btn{border:1px solid #6b4a22;background:linear-gradient(180deg,#241d11,#191408);color:var(--caution);
     padding:7px 13px;font:700 .76rem/1.2 "Avenir Next Condensed","Arial Narrow",sans-serif;
     letter-spacing:.16em;text-transform:uppercase;cursor:pointer;white-space:nowrap;
-    text-decoration:none;display:inline-block;
+    text-decoration:none;display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.06), 0 1px 0 rgba(0,0,0,.5);}
   .btn::before{content:"\\25B8 ";}
   .btn:hover{background:#2b2312;}
@@ -705,6 +709,9 @@ const BOARD_JS = `
     const link = card.links[0];
     if (link) {
       const a = el('a', 'btn', link.label);
+      // A long label truncates with an ellipsis inside its column; the full
+      // label stays readable on hover.
+      a.title = link.label;
       a.href = link.href;
       if (link.kind === 'external') {
         a.target = '_blank';
