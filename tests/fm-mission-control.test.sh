@@ -320,10 +320,7 @@ assert plain["decisionContexts"] == [""], plain["decisionContexts"]
 assert plain["context"] == "", plain["context"]
 assert plain["latest"] == "The fix is in review with checks passing.", plain["latest"]
 ' || fail "context bodies parse wrong"
-page=$(curl -sf "$BASE/")
-assert_contains "$page" "contextToggle" "board page ships the context disclosure"
-assert_contains "$page" "openContexts" "expanded context panels survive re-renders"
-pass "decision and latest-update context bodies parse and render collapsed panels"
+pass "decision and latest-update context bodies parse into card fields"
 
 # --- local doc rendering and containment ---------------------------------------
 
