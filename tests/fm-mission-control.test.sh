@@ -247,6 +247,32 @@ act_file=$(find "$INBOX" -name '*-deploy-pipeline.msg' | head -1)
 assert_grep "kind: re-engage" "$act_file" "action event carries kind"
 pass "captain input lands as inbox event files"
 
+# --- pending send feedback --------------------------------------------------------
+
+# /api/cards reports each card's queued, not-yet-consumed inbox events (docs/
+# mission-control.md "Server wire contract"), so the board's queued-for-pickup
+# chip appears after a send and disappears once firstmate consumes the file.
+curl -sf "$BASE/api/cards" | python3 -c '
+import json, sys
+
+cards = {c["slug"]: c for c in json.load(sys.stdin)["cards"]}
+assert cards["fix-login-flakes"]["pending"] == 1, "message not counted as pending"
+assert cards["deploy-pipeline"]["pending"] == 1, "action not counted as pending"
+assert cards["study"]["pending"] == 0, "card without queued input not zero"
+' || fail "/api/cards pending counts are wrong after sends"
+curl -sf -X POST "$BASE/api/action" -H 'content-type: application/json' \
+  -d '{"slug":"stub-card","action":"park"}' > /dev/null || fail "park post failed"
+pending=$(curl -sf "$BASE/api/cards" | python3 -c '
+import json, sys
+print({c["slug"]: c for c in json.load(sys.stdin)["cards"]}["stub-card"]["pending"])')
+[ "$pending" = 1 ] || fail "stub-card pending is $pending after a send, expected 1"
+rm -f "$INBOX"/*-stub-card.msg
+pending=$(curl -sf "$BASE/api/cards" | python3 -c '
+import json, sys
+print({c["slug"]: c for c in json.load(sys.stdin)["cards"]}["stub-card"]["pending"])')
+[ "$pending" = 0 ] || fail "stub-card pending is $pending after consumption, expected 0"
+pass "pending counts appear on send and clear when the event file is consumed"
+
 # --- group actions ----------------------------------------------------------------
 
 curl -sf -X POST "$BASE/api/group-action" -H 'content-type: application/json' \

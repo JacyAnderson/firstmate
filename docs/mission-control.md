@@ -108,7 +108,7 @@ A request target that fails URL parsing is refused with 400 rather than taking t
 A POST body that does not parse as a JSON object (malformed JSON, `null`, a string, an array) is refused with 400 before any field is read.
 
 - `GET /` - the board page; it polls for card updates itself, so the captain refreshes nothing manually.
-- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), and `latest` (the latest-update text).
+- `GET /api/cards` - JSON `{"cards": [...]}` with one object per initiative file: `slug`, `title`, `status`, `updated`, `area`, `umbrella`, `priority` (0-4 or null), `workItems`, `decisions`, `links` (each `{label, href, kind}` with `kind` `external` or `doc`), `latest` (the latest-update text), and `pending` (the count of the card's queued, not-yet-consumed inbox events, derived from the inbox file names).
   The array is sorted by the ordering rule below; consumers may rely on that order.
 - `POST /api/message` - JSON `{"slug", "text"}`; appends a `message` inbox event; 400 on an invalid slug or empty text.
 - `POST /api/action` - JSON `{"slug", "action"}` with action `park`, `re-engage`, or `drop`; appends the matching inbox event; 400 otherwise.
@@ -138,6 +138,7 @@ The board (the owner-approved Command Deck rendering) cuts three zones straight 
 - **Shelf** - a dashed box of dimmed one-liners for parked initiatives, each with a Re-engage button and its shelved date from `updated:`.
 
 Every row's menu offers Send a note (opens the per-initiative message box, a `message` event), Shelve (a `park` event), and Retire (a `drop` event, one click).
+Submitting any input clears it immediately, keeps the control disabled while the write is in flight, and confirms inline on the row with a queued-for-pickup chip that stays until firstmate consumes the event file; the wording is deliberately honest that pickup happens on the next pass, not instantly.
 Umbrella children fold indented under their parent's row within a zone; a child whose parent sits in another zone renders as its own row, so an ask is never hidden inside a quiet group.
 Work items stay card data and never render as their own rows, which keeps the board calm at ten initiatives.
 

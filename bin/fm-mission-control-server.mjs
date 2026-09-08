@@ -171,6 +171,29 @@ function cardLinks(card) {
   });
 }
 
+// Queued, not-yet-consumed inbox events per slug, counted from the inbox file
+// names (`<epoch-ms>-<seq>-<slug>.msg`; docs/mission-control.md "Inbox event
+// format"). The board renders this as the queued-for-pickup chip, which
+// disappears once firstmate consumes (deletes) the event file.
+function pendingCounts() {
+  const counts = new Map();
+  let names = [];
+  try {
+    names = readdirSync(INBOX_DIR);
+  } catch {
+    return counts;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.msg')) continue;
+    const parts = name.slice(0, -4).split('-');
+    if (parts.length < 3 || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1])) continue;
+    const slug = parts.slice(2).join('-');
+    if (!SLUG_RE.test(slug)) continue;
+    counts.set(slug, (counts.get(slug) || 0) + 1);
+  }
+  return counts;
+}
+
 // --- inbox writes ------------------------------------------------------------
 
 function writeInboxEvent(kind, slug, text, epochMs = Date.now()) {
@@ -341,6 +364,12 @@ const PAGE_CSS = `
     background:#12151a;color:var(--text);padding:6px 10px;font:inherit;font-size:.9rem;}
   .btn.subtle{opacity:.7;}
 
+  /* queued-for-pickup send feedback */
+  .sent{grid-column:1/-1;display:flex;gap:8px;align-items:center;margin-top:6px;font-size:.85rem;color:var(--dim);}
+  .quiet .sent,.shelf .sent{margin:2px 0 8px;}
+  .chip-queued{border:1px solid #3d4550;background:#171b21;color:var(--dim);border-radius:999px;
+    padding:1px 8px;font-size:.75rem;white-space:nowrap;}
+
   .empty{color:var(--dim);margin:32px 0;}
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#20262e;border:1px solid #3d4550;color:var(--text);
     border-radius:8px;padding:8px 16px;font-size:.85rem;opacity:0;transition:opacity .2s;pointer-events:none;}
@@ -359,9 +388,11 @@ const BOARD_JS = `
   const POLL_MS = 5000;
   let lastPayload = '';
   let lastCards = [];
-  // Open note editors, unsent drafts, and the open menu survive re-renders.
+  // Open note editors, unsent drafts, the open menu, and this session's
+  // send confirmations survive re-renders.
   const openNotes = new Set();
   const drafts = {};
+  const confirmations = new Map();
   let openMenu = '';
 
   // Zone derivation mirrors the server's ordering rule: parked cards sit on
@@ -417,19 +448,48 @@ const BOARD_JS = `
     return n + ' ' + word + (n === 1 ? '' : 's');
   }
 
+  // A successful send confirms on the row right away: the confirmation text
+  // is remembered per slug, the local card's pending count is bumped so the
+  // queued-for-pickup chip shows before the next poll, and the server's own
+  // pending count takes over from the forced refresh onward.
+  function noteQueued(slug, text) {
+    confirmations.set(slug, text);
+    const card = lastCards.find((c) => c.slug === slug);
+    if (card) card.pending = (card.pending || 0) + 1;
+    render(lastCards);
+    refresh(true);
+  }
+
   // The button stays disabled while its request is in flight so a rapid
-  // double click cannot queue duplicate events; re-enabling matters only on
+  // double click cannot queue a duplicate event; re-enabling matters only on
   // failure, since a success re-renders the row.
   async function act(slug, action, doneMsg, btn) {
     if (btn) btn.disabled = true;
     try {
       await post('/api/action', { slug, action });
       toast(doneMsg);
-      refresh(true);
+      noteQueued(slug, doneMsg);
     } catch {
       toast('Could not send \\u2014 try again.');
       if (btn) btn.disabled = false;
     }
+  }
+
+  // The queued-for-pickup line stays on the row while the initiative has
+  // unconsumed inbox events, and honestly says pickup happens on the next
+  // pass, not instantly; it disappears once the event files are consumed.
+  function feedbackLine(card) {
+    const msg = confirmations.get(card.slug);
+    if (!card.pending) {
+      if (msg) confirmations.delete(card.slug);
+      return null;
+    }
+    const box = el('div', 'sent');
+    const chip = el('span', 'chip-queued', 'queued for pickup');
+    chip.title = 'Queued \\u2014 picked up on the next pass, not instant.';
+    box.appendChild(chip);
+    box.appendChild(el('span', null, msg || 'Sent \\u2014 picked up on the next pass'));
+    return box;
   }
 
   function closeMenus() {
@@ -471,10 +531,10 @@ const BOARD_JS = `
     menu.appendChild(el('hr'));
     if (card.status !== 'parked') {
       menu.appendChild(menuItem('Shelve', 'pause everything safely; drops to the shelf below', null,
-        (b) => act(card.slug, 'park', 'Shelved.', b)));
+        (b) => act(card.slug, 'park', 'Shelve queued \\u2014 picked up on the next pass', b)));
     }
     menu.appendChild(menuItem('Retire', 'close it out for good; unfinished work is flagged first, never discarded', 'retire',
-      (b) => act(card.slug, 'drop', 'Retire requested.', b)));
+      (b) => act(card.slug, 'drop', 'Retire queued \\u2014 picked up on the next pass', b)));
     if (openMenu === card.slug) menu.classList.add('open');
     row.appendChild(more);
     row.appendChild(menu);
@@ -487,17 +547,22 @@ const BOARD_JS = `
     ta.dataset.draftFor = card.slug;
     if (drafts[card.slug]) ta.value = drafts[card.slug];
     const send = el('button', 'btn', 'Send');
+    // The input clears the moment the note is submitted and the control stays
+    // disabled while the write is in flight; a failure restores the text.
     send.onclick = async () => {
       const text = ta.value.trim();
       if (!text) return;
+      ta.value = '';
+      delete drafts[card.slug];
       send.disabled = true;
       try {
         await post('/api/message', { slug: card.slug, text });
-        delete drafts[card.slug];
         openNotes.delete(card.slug);
-        toast('Sent.');
-        render(lastCards);
+        toast('Note sent \\u2014 queued for pickup.');
+        noteQueued(card.slug, 'Note sent \\u2014 queued for pickup on the next pass');
       } catch {
+        ta.value = text;
+        drafts[card.slug] = text;
         toast('Could not send \\u2014 try again.');
         send.disabled = false;
       }
@@ -553,6 +618,8 @@ const BOARD_JS = `
     li.appendChild(actionCell(card));
     rowMenu(card, li);
     if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
+    const fb = feedbackLine(card);
+    if (fb) li.appendChild(fb);
     return li;
   }
 
@@ -563,6 +630,8 @@ const BOARD_JS = `
     li.appendChild(el('span', null, firstLine(card.latest)));
     rowMenu(card, li);
     if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
+    const fb = feedbackLine(card);
+    if (fb) li.appendChild(fb);
     return li;
   }
 
@@ -574,11 +643,13 @@ const BOARD_JS = `
     li.appendChild(el('span', null, line + (when ? (line ? '; ' : '') + 'shelved ' + when : '')));
     const cell = el('span');
     const re = el('button', 'btn', 'Re-engage');
-    re.onclick = () => act(card.slug, 're-engage', 'Re-engaging.', re);
+    re.onclick = () => act(card.slug, 're-engage', 'Re-engage queued \\u2014 picked up on the next pass', re);
     cell.appendChild(re);
     li.appendChild(cell);
     rowMenu(card, li);
     if (openNotes.has(card.slug)) li.appendChild(noteEditor(card));
+    const fb = feedbackLine(card);
+    if (fb) li.appendChild(fb);
     return li;
   }
 
@@ -784,7 +855,8 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/cards') {
-      const cards = listCards().map((c) => ({ ...c, links: cardLinks(c) }));
+      const pending = pendingCounts();
+      const cards = listCards().map((c) => ({ ...c, links: cardLinks(c), pending: pending.get(c.slug) || 0 }));
       sendJson(res, 200, { cards });
       return;
     }
