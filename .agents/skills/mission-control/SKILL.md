@@ -22,6 +22,7 @@ Update the initiative card in the same pass as the backlog update firstmate alre
   Set `area:` to the project or focus area, and set `umbrella:` to the parent initiative's slug when the card is a child of one (a spawned decision, a sub-investigation), so its row folds under its parent instead of standing alone.
 - **Delivery** - a PR ready for review, a merged change, or a delivered report; refresh the latest update with the outcome and the full PR URL as a `link:` line, and link a local report under `data/` the same way so the captain can read it from the board.
 - **Decision needed** - status `waiting-on-you` plus one `decision:` line per pending decision, matching the decision holds registered under `decision-hold-lifecycle`; remove the line and restore `active` when the decision lands.
+  A decision line must either be self-explanatory to a reader with no session context or carry an indented context body (docs/mission-control.md "Initiative file schema") written in plain language - compressed or session-assuming card text is the failure mode the context panel exists to fix.
 - **Failure or blocker** - status `waiting-on-you` with the consequence and the concrete ask in the latest update.
 
 Every write sets `updated:` to the current UTC time, keeps the latest update to two or three sentences of captain-facing outcome language (AGENTS.md section 9 - no internal vocabulary on cards), and pushes the previous update onto the top of `## History`.

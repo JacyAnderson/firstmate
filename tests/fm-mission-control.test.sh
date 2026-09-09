@@ -238,6 +238,90 @@ assert cards["fix-login-flakes"]["area"] == "", "missing area not empty"
 ' || fail "/api/cards zone ordering or field rendering is wrong"
 pass "GET /api/cards sorts asks first, oldest ask first"
 
+# --- link labels -----------------------------------------------------------------
+
+# A bare link target derives a chip label naming what it opens (docs/
+# mission-control.md "Initiative file schema"): PR/MR/issue numbers, blob and
+# doc file names, repository-root project names, the board's own port and
+# review-session paths, and the bare hostname otherwise; an explicit label
+# always wins. Written after the ordering assertions so their expected card
+# list stays exact; cards are re-read per request, so the new file just shows.
+cat > "$INITIATIVES/link-labels.md" <<EOF
+---
+title: Link label derivation
+status: active
+updated: 2026-08-26T11:00:00Z
+link: https://github.com/acme/web/pull/412
+link: https://git.example.io/group/sub/repo/-/merge_requests/7
+link: https://github.com/acme/web/issues/9
+link: https://github.com/acme/web/blob/main/docs/ARCHITECTURE.md
+link: https://github.com/acme/web
+link: https://git.example.io/developers/phoenix-assistant
+link: http://127.0.0.1:$PORT/
+link: http://127.0.0.1:4387/session/70233a24f2680dfb
+link: https://dashboards.example.com/deep/nested/path/view
+link: data/mc-scout/report.md
+link: the design brief https://github.com/acme/web/blob/main/DESIGN.md
+---
+Chips must say what they open.
+EOF
+curl -sf "$BASE/api/cards" | python3 -c '
+import json, sys
+
+card = {c["slug"]: c for c in json.load(sys.stdin)["cards"]}["link-labels"]
+labels = [l["label"] for l in card["links"]]
+expected = ["PR #412", "MR 7", "Issue #9", "ARCHITECTURE.md", "web",
+            "phoenix-assistant", "Board", "Review app",
+            "dashboards.example.com", "report.md", "the design brief"]
+assert labels == expected, f"labels {labels} != {expected}"
+' || fail "derived link labels are wrong"
+pass "bare link targets derive chip labels and explicit labels win"
+
+# --- context bodies ----------------------------------------------------------------
+
+# Indented lines under a decision: line form its context body, and a
+# "## Context" body section carries the latest update's context (docs/
+# mission-control.md "Initiative file schema"); cards without context keep
+# empty fields and their latest update text unchanged.
+cat > "$INITIATIVES/context-card.md" <<'EOF'
+---
+title: Context bodies
+status: waiting-on-you
+updated: 2026-08-26T10:00:00Z
+decision: Pick the publish path on Stat
+  Stat is the internal static host.
+  Publishing means copying the site directory to a path you choose.
+decision: Approve the outward reply
+work-items: ctx-item
+---
+The update itself stays short.
+
+## Context
+The longer background for the update lives here,
+across multiple lines.
+
+## History
+- 2026-08-26T10:00:00Z: opened
+EOF
+curl -sf "$BASE/api/cards" | python3 -c '
+import json, sys
+
+cards = {c["slug"]: c for c in json.load(sys.stdin)["cards"]}
+card = cards["context-card"]
+assert card["decisions"] == ["Pick the publish path on Stat", "Approve the outward reply"], card["decisions"]
+assert card["decisionContexts"] == [
+    "Stat is the internal static host.\nPublishing means copying the site directory to a path you choose.",
+    ""], card["decisionContexts"]
+assert card["context"] == "The longer background for the update lives here,\nacross multiple lines.", card["context"]
+assert card["latest"] == "The update itself stays short.", card["latest"]
+assert card["workItems"] == ["ctx-item"], "indented run must not swallow later keys"
+plain = cards["fix-login-flakes"]
+assert plain["decisionContexts"] == [""], plain["decisionContexts"]
+assert plain["context"] == "", plain["context"]
+assert plain["latest"] == "The fix is in review with checks passing.", plain["latest"]
+' || fail "context bodies parse wrong"
+pass "decision and latest-update context bodies parse into card fields"
+
 # --- local doc rendering and containment ---------------------------------------
 
 doc=$(curl -sf "$BASE/doc/fix-login-flakes/1")
