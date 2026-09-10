@@ -226,6 +226,8 @@ $(printf '%s' "$SNAP" | jq -r '.tasks[] | select(.kind != "secondmate") | .paths
 EOF
 
     for repo in $repos; do PR_REPOS_TOTAL=$((PR_REPOS_TOTAL + 1)); done
+    # Known task ids, for mapping bare-slug PR head branches to tasks below.
+    TASK_IDS=$(printf '%s' "$SNAP" | jq '[.tasks[].id]')
     nrepos=0; npr=0; nwarn=0; ncapped=0; rows='[]'
     pr_fetch_limit=$((FM_BEARINGS_PR_LIMIT + 1))
     for repo in $repos; do
@@ -235,11 +237,14 @@ EOF
         --json number,title,url,headRefName,reviewDecision,mergeable,statusCheckRollup 2>/dev/null) \
         || { nwarn=$((nwarn + 1)); continue; }
       [ -n "$out" ] || out='[]'
-      repo_result=$(printf '%s' "$out" | jq --arg repo "$repo" --argjson limit "$FM_BEARINGS_PR_LIMIT" '
+      repo_result=$(printf '%s' "$out" | jq --arg repo "$repo" --argjson limit "$FM_BEARINGS_PR_LIMIT" --argjson ids "$TASK_IDS" '
         [ .[] | {
           num:(.number|tostring),
           repo:$repo,
-          task:(if (.headRefName // "" | startswith("fm/")) then (.headRefName | ltrimstr("fm/")) else "-" end),
+          task:((.headRefName // "") as $h
+                | if ($h | startswith("fm/")) then ($h | ltrimstr("fm/"))
+                  elif ($ids | index($h)) != null then $h
+                  else "-" end),
           url:(.url // "-"),
           review:(.reviewDecision // "none"),
           mergeable:(.mergeable // "UNKNOWN"),
