@@ -67,10 +67,17 @@ default_branch() {
 
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
-BRANCH="fm/$ID"
-if ! git -C "$WT" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null; then
+# Current convention is the bare task id; older briefs created fm/<id>.
+BRANCH=""
+for candidate in "$ID" "fm/$ID"; do
+  if git -C "$WT" rev-parse --verify --quiet "refs/heads/$candidate" >/dev/null; then
+    BRANCH=$candidate
+    break
+  fi
+done
+if [ -z "$BRANCH" ]; then
   BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
-  [ -n "$BRANCH" ] || { echo "error: branch fm/$ID does not exist and worktree $WT is detached" >&2; exit 1; }
+  [ -n "$BRANCH" ] || { echo "error: no task branch for $ID (looked for '$ID' and legacy 'fm/$ID') and worktree $WT is detached" >&2; exit 1; }
   git -C "$WT" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH does not exist in $WT" >&2; exit 1; }
 fi
 

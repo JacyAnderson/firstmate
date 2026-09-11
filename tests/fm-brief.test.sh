@@ -345,6 +345,33 @@ test_ship_and_scout_carry_outward_language_rule() {
   pass "fm-brief.sh: ship and scout scaffolds carry the outward-language rule"
 }
 
+# Task branches are named with the bare task slug; the fm/ namespace is gone
+# from generated briefs (legacy fm/ branches are tolerated only by consumers).
+test_ship_briefs_use_bare_slug_branch() {
+  local home id brief
+  home="$TMP_ROOT/branch-name-home"
+  write_registry "$home"
+
+  id="brief-branchname-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" no-registry-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'git checkout -b brief-branchname-e1`' "$brief" \
+    "ship brief must instruct the bare-slug branch name"
+  assert_no_grep "fm/$id" "$brief" "ship brief must not namespace the branch under fm/"
+
+  id="brief-branchname-e2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'git checkout -b brief-branchname-e2`' "$brief" \
+    "local-only brief must instruct the bare-slug branch name"
+  assert_grep "done: ready in branch $id" "$brief" \
+    "local-only brief must report readiness with the bare-slug branch name"
+  assert_no_grep "fm/$id" "$brief" "local-only brief must not namespace the branch under fm/"
+  pass "fm-brief.sh: ship and local-only briefs use the bare task slug as the branch name"
+}
+
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -379,4 +406,5 @@ test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_ship_and_scout_carry_outward_language_rule
+test_ship_briefs_use_bare_slug_branch
 test_scout_and_secondmate_scaffold

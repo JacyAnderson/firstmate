@@ -44,6 +44,12 @@ SH
 echo "gh $*" >> "$NET_LOG"
 if [ "${FAKE_GH_FAIL:-0}" = 1 ]; then exit 1; fi
 if [ "${FAKE_GH_SLEEP:-0}" = 1 ]; then sleep 30; fi
+if [ "${FAKE_GH_BARE:-0}" = 1 ]; then
+  cat <<'JSON'
+[{"number":9,"title":"Ship the thing","url":"https://github.com/kunchenguid/firstmate/pull/9","headRefName":"fm/ship-task","reviewDecision":"APPROVED","mergeable":"MERGEABLE","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}]},{"number":10,"title":"Scout follow-up","url":"https://github.com/kunchenguid/firstmate/pull/10","headRefName":"scout-x","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]},{"number":11,"title":"Unrelated","url":"https://github.com/kunchenguid/firstmate/pull/11","headRefName":"release/v2","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]}]
+JSON
+  exit 0
+fi
 if [ "${FAKE_GH_MANY:-0}" = 1 ]; then
   cat <<'JSON'
 [{"number":1,"title":"One","url":"https://github.com/acme/repo/pull/1","headRefName":"fm/one","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]},{"number":2,"title":"Two","url":"https://github.com/acme/repo/pull/2","headRefName":"fm/two","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]},{"number":3,"title":"Three","url":"https://github.com/acme/repo/pull/3","headRefName":"fm/three","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]}]
@@ -957,6 +963,21 @@ test_include_prs_is_the_only_fetch_path() {
     .candidate_prs | any(.[]; .num == "9" and .task == "ship-task" and .checks == "passing" and .review == "APPROVED")
   ' >/dev/null || fail "candidate_prs must carry the fetched PR cross-referenced to its task: $json"
   pass "--include-prs is the only path that fetches, and it enriches correctly"
+}
+
+# Task branches use the bare task slug; legacy fm/<id> heads keep mapping, and a
+# bare head that is not a known task id must not be claimed as a task.
+test_candidate_prs_map_bare_and_legacy_branches() {
+  local home fakebin json
+  home=$(make_home pr-branch-forms); write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  json=$(FAKE_GH_BARE=1 run "$home" "$fakebin" --include-prs --json)
+  printf '%s' "$json" | jq -e '
+    (.candidate_prs | any(.[]; .num == "9" and .task == "ship-task"))
+      and (.candidate_prs | any(.[]; .num == "10" and .task == "scout-x"))
+      and (.candidate_prs | any(.[]; .num == "11" and .task == "-"))
+  ' >/dev/null || fail "candidate_prs must map legacy fm/ and bare-slug heads to tasks, and leave unknown branches unmapped: $json"
+  pass "candidate_prs maps both bare-slug and legacy fm/ head branches to tasks"
 }
 
 test_partial_github_failure_degrades() {
@@ -1926,6 +1947,7 @@ test_open_decision_surfaces_end_to_end
 test_report_pointers_surface
 test_superseded_queued_item_dropped_by_default
 test_include_prs_is_the_only_fetch_path
+test_candidate_prs_map_bare_and_legacy_branches
 test_partial_github_failure_degrades
 test_perl_fallback_bounds_github_call
 test_section_caps_and_expansion_flags

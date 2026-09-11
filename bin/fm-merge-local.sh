@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Perform the approved local merge for a local-only ship task: fast-forward the
-# project's default branch to the crewmate's fm/<id> branch.
+# project's default branch to the crewmate's task branch. Task branches are named
+# with the bare task id (<id>); the legacy fm/<id> form from older briefs is
+# accepted equally, so in-flight legacy tasks keep merging.
 #
 # This is firstmate's merge gate-action (the captain's merge authority applied
 # locally instead of via a GitHub PR). It is the one sanctioned exception to hard
@@ -41,8 +43,15 @@ default_branch() {
   return 1
 }
 
-BRANCH="fm/$ID"
-git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH does not exist in $PROJ" >&2; exit 1; }
+# Current convention is the bare task id; older briefs created fm/<id>.
+BRANCH=""
+for candidate in "$ID" "fm/$ID"; do
+  if git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$candidate" >/dev/null; then
+    BRANCH=$candidate
+    break
+  fi
+done
+[ -n "$BRANCH" ] || { echo "error: no task branch for $ID in $PROJ (looked for '$ID' and legacy 'fm/$ID')" >&2; exit 1; }
 
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
