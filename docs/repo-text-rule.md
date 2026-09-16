@@ -7,7 +7,8 @@ Edit the rule here and nowhere else; the brief, the checker's banned-phrase list
 The rule follows the study recorded in the firstmate owner's investigation of agent-written comments: workers follow the brief exactly, so the brief has to be specific about length and shape, not only vocabulary.
 Two decisions in the block below are repository policy rather than style and are the easiest lines to change:
 
-- Disclosure: no `Co-Authored-By` or other agent trailers on commits; AI assistance is disclosed once per PR/MR, as the last line of the description.
+- Disclosure: no `Co-Authored-By` or other agent trailers on commits; AI assistance is disclosed once per PR/MR, as the line that ends the description prose.
+  A signature section the repo's checks require may sit below that line.
 - Commit bodies: one to three sentences of why, only when the subject does not already carry it.
   This is the default pending a final ruling on body policy.
 
