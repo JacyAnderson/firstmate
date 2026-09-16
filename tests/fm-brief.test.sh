@@ -321,28 +321,57 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
-# Ship and scout scaffolds carry the standing outward-language rule so workers
-# never leak agent-workflow vocabulary into PRs, commits, comments, or issues.
-test_ship_and_scout_carry_outward_language_rule() {
+# Ship and scout scaffolds inline rule 8 from its one owner file,
+# docs/repo-text-rule.md, and append the fm-text-check.sh instruction, so the
+# rule text itself is never duplicated in the script.
+test_ship_and_scout_inline_repo_text_rule() {
   local home kind id brief
-  home="$TMP_ROOT/outward-language-home"
+  home="$TMP_ROOT/repo-text-rule-home"
   mkdir -p "$home/data"
   for kind in ship scout; do
-    id="brief-outward-$kind"
+    id="brief-repotext-$kind"
     if [ "$kind" = scout ]; then
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
     else
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate >/dev/null 2>&1
     fi
     brief="$home/data/$id/brief.md"
-    assert_grep "must be plain engineering prose written for the target repo's human" "$brief" \
-      "$kind brief lost the outward-language plain-prose requirement"
-    assert_grep "never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate," "$brief" \
+    assert_grep "8. Everything you write into the repo (code comments, commit messages, PR/MR titles and" "$brief" \
+      "$kind brief lost the repo-text rule as rule 8"
+    assert_grep "   - Commit subject: imperative, under 60 characters." "$brief" \
+      "$kind brief lost the commit-shape rule (indented under rule 8)"
+    assert_grep "No agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate," "$brief" \
       "$kind brief lost the banned agent-workflow vocabulary list"
-    assert_grep "Self-check outward text against this rule before publishing" "$brief" \
-      "$kind brief lost the pre-publish self-check instruction"
+    assert_grep "Before each commit, reread the staged diff's comments and the commit message against this rule" "$brief" \
+      "$kind brief lost the commit-time self-check sentence"
+    assert_grep "Run \`$ROOT/bin/fm-text-check.sh --staged\` before each commit and act on what it lists." "$brief" \
+      "$kind brief lost the advisory text-check instruction"
+    assert_no_grep "<!-- rule-" "$brief" "$kind brief leaked the owner file's marker comments"
+    assert_no_grep "All outward-facing text you author" "$brief" "$kind brief still carries the superseded rule 8 wording"
   done
-  pass "fm-brief.sh: ship and scout scaffolds carry the outward-language rule"
+  # The rule text has one owner: the scaffold script must not restate it.
+  assert_no_grep "Everything you write into the repo" "$ROOT/bin/fm-brief.sh" \
+    "fm-brief.sh must inline docs/repo-text-rule.md, not carry its own copy of the rule"
+  pass "fm-brief.sh: ship and scout scaffolds inline rule 8 from docs/repo-text-rule.md"
+}
+
+# A missing or marker-less owner file must abort the scaffold instead of
+# emitting a brief with no rule 8.
+test_missing_repo_text_rule_aborts_scaffold() {
+  local home fake out rc
+  home="$TMP_ROOT/missing-rule-home"
+  fake="$TMP_ROOT/fake-root"
+  mkdir -p "$home/data" "$fake/docs"
+  cp -R "$ROOT/bin" "$fake/bin"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-norule-a firstmate --scout 2>&1); rc=$?
+  expect_code 1 "$rc" "scaffold must fail when docs/repo-text-rule.md is missing"
+  assert_contains "$out" "repo-text rule owner file missing" "missing owner file must be named in the error"
+  assert_absent "$home/data/brief-norule-a/brief.md" "no brief may be written without the rule"
+  printf '# Rule\n\nProse with no markers.\n' > "$fake/docs/repo-text-rule.md"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-norule-b firstmate --scout 2>&1); rc=$?
+  expect_code 1 "$rc" "scaffold must fail when the owner file has no rule block"
+  assert_contains "$out" "no rule block between rule-start and rule-end markers" "empty rule block must be named in the error"
+  pass "fm-brief.sh: a missing or empty repo-text rule aborts the scaffold"
 }
 
 # Task branches are named with the bare task slug; the fm/ namespace is gone
@@ -405,6 +434,7 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
-test_ship_and_scout_carry_outward_language_rule
+test_ship_and_scout_inline_repo_text_rule
+test_missing_repo_text_rule_aborts_scaffold
 test_ship_briefs_use_bare_slug_branch
 test_scout_and_secondmate_scaffold

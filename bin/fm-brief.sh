@@ -34,6 +34,10 @@
 #   local-only   implement on branch, stop and report "ready in branch" (no push/PR);
 #                captain approves, firstmate merges to local main
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
+# Rule 8 (comments, commit messages, PR/MR text) is not written here: ship and
+# scout scaffolds inline the marked block of docs/repo-text-rule.md and append
+# the bin/fm-text-check.sh --staged instruction, so that doc is the rule's only
+# owner. A missing or empty rule block aborts the scaffold.
 # Scout tasks ignore mode - their deliverable is a report, not a merge.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
@@ -191,6 +195,21 @@ fi
 
 REPO=${POS[1]}
 
+# Rule 8 comes from its one owner file, resolved from this script's own code
+# root because FM_ROOT_OVERRIDE may name a home that is not a checkout. The
+# doc's marker comments delimit the exact text so its surrounding prose stays
+# out of the brief.
+RULE_FILE="$SCRIPT_DIR/../docs/repo-text-rule.md"
+[ -r "$RULE_FILE" ] || { echo "error: repo-text rule owner file missing: $RULE_FILE" >&2; exit 1; }
+RULE8=$(awk '
+  /^<!-- rule-start -->$/ { on = 1; next }
+  /^<!-- rule-end -->$/ { on = 0 }
+  on { if (n++ == 0) print "8. " $0; else print "   " $0 }
+' "$RULE_FILE")
+[ -n "$RULE8" ] || { echo "error: no rule block between rule-start and rule-end markers in $RULE_FILE" >&2; exit 1; }
+RULE8="$RULE8
+   Run \`$FM_ROOT/bin/fm-text-check.sh --staged\` before each commit and act on what it lists."
+
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
 # shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
@@ -259,12 +278,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
-8. All outward-facing text you author (PR titles and descriptions, commit messages, code comments,
-   review comments, issue text) must be plain engineering prose written for the target repo's human
-   audience - never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate,
-   "brief"/"task brief" as workflow terms, narration about your own worktree or pipeline, nautical
-   phrasing). Self-check outward text against this rule before publishing it (opening a PR,
-   pushing a commit, posting a comment).
+$RULE8
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -375,12 +389,7 @@ $RULE1
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
-8. All outward-facing text you author (PR titles and descriptions, commit messages, code comments,
-   review comments, issue text) must be plain engineering prose written for the target repo's human
-   audience - never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate,
-   "brief"/"task brief" as workflow terms, narration about your own worktree or pipeline, nautical
-   phrasing). Self-check outward text against this rule before publishing it (opening a PR,
-   pushing a commit, posting a comment).
+$RULE8
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
