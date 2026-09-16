@@ -7,7 +7,7 @@ Edit the rule here and nowhere else; the brief, the checker's banned-phrase list
 The rule follows the study recorded in the firstmate owner's investigation of agent-written comments: workers follow the brief exactly, so the brief has to be specific about length and shape, not only vocabulary.
 Two decisions in the block below are repository policy rather than style and are the easiest lines to change:
 
-- Disclosure: no `Co-Authored-By` or other agent trailers on commits; AI assistance is disclosed once per PR/MR, in the description.
+- Disclosure: no `Co-Authored-By` or other agent trailers on commits; AI assistance is disclosed once per PR/MR, as the last line of the description.
 - Commit bodies: one to three sentences of why, only when the subject does not already carry it.
   This is the default pending a final ruling on body policy.
 
@@ -23,9 +23,10 @@ Everything you write into the repo (code comments, commit messages, PR/MR titles
 - Commit subject: imperative, under 60 characters.
   Body only when the subject does not carry the why, then one to three sentences: what was wrong, why this fix.
   No per-file changelog, no list of tests, no verification log; those belong in the PR description.
-  No `Co-Authored-By` or other agent trailers; disclose AI assistance once per PR/MR, in the description.
+  No `Co-Authored-By` or other agent trailers.
 - PR/MR description: the problem, the approach, how you verified it.
-  Plain sentences or short bullets without a bold-label formula.
+  Plain sentences or short bullets without a bold-label formula, ending with one line that discloses AI assistance; that line is the only disclosure.
+  When a pipeline or tool opened the PR/MR, rewrite its generated description to this shape before reporting done, keeping only the signature block the repo's checks require.
 - No em dashes, no spaced hyphens as dashes, no arrow chains, no "Note that", "This ensures", "In order to".
   No editorial adjectives about the code ("honestly", "cleanly").
   No agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate, "brief" as a workflow term, your worktree or pipeline, nautical phrasing).

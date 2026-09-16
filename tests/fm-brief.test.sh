@@ -119,6 +119,43 @@ test_no_mistakes_dod_wording() {
   pass "fm-brief.sh: no-mistakes DOD wording avoids the apostrophe regression"
 }
 
+# Both PR-based delivery modes make the worker responsible for the PR
+# description's shape: the pipeline path rewrites the generated description
+# after CI is green and before reporting done, the direct path writes it that
+# way when opening the PR. local-only opens no PR and must not carry either.
+test_pr_modes_require_rule8_description() {
+  local home id brief
+  home="$TMP_ROOT/pr-description-home"
+  write_registry "$home"
+
+  id="brief-prdesc-nm"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" no-registry-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'rewrite the PR description with `gh-axi pr edit` to the PR/MR shape in rule 8' "$brief" \
+    "no-mistakes DOD must have the worker rewrite the pipeline-written PR description"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'keeping only the `## Pipeline` signature section that CI requires' "$brief" \
+    "no-mistakes DOD must preserve the CI-required signature section"
+  assert_grep "Then append \`done: PR {url} checks green\` and stop." "$brief" \
+    "no-mistakes DOD must report done only after the description rewrite"
+
+  id="brief-prdesc-direct"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "whose description follows the PR/MR shape in rule 8" "$brief" \
+    "direct-PR DOD must require a rule 8 PR description when opening the PR"
+  assert_no_grep "gh-axi pr edit" "$brief" \
+    "direct-PR DOD has no pipeline-written description to rewrite"
+
+  id="brief-prdesc-local"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_no_grep "PR/MR shape" "$brief" \
+    "local-only DOD opens no PR and must not carry a PR description step"
+  pass "fm-brief.sh: PR-based definitions of done require a rule 8 PR description"
+}
+
 test_ship_project_memory_wording() {
   local home id brief
   home="$TMP_ROOT/project-memory-home"
@@ -456,6 +493,7 @@ test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_pr_modes_require_rule8_description
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
