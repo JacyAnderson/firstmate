@@ -34,6 +34,10 @@
 #   local-only   implement on branch, stop and report "ready in branch" (no push/PR);
 #                captain approves, firstmate merges to local main
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
+# Rule 8 (comments, commit messages, PR/MR text) is not written here: ship and
+# scout scaffolds inline the marked block of docs/repo-text-rule.md and append
+# the bin/fm-text-check.sh --staged instruction, so that doc is the rule's only
+# owner. A missing, empty, doubled, or unterminated rule block aborts the scaffold.
 # Scout tasks ignore mode - their deliverable is a report, not a merge.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
@@ -97,7 +101,6 @@ fi
 
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
-mkdir -p "$DATA/$ID"
 
 shell_quote() {
   printf "'"
@@ -128,6 +131,7 @@ else
   PROJECT_CLONES_BODY=$(printf '%s\n' "$SECONDMATE_PROJECTS" | tr ' ' '\n' | sed 's/^/- /')
   PROJECT_CLONES_NOTE="The projects above are local clones for work you supervise; they are not an exclusive ownership claim."
 fi
+mkdir -p "$DATA/$ID"
 cat > "$BRIEF" <<EOF
 You are a persistent second mate managed by the main firstmate. Work on your own; do not wait for a human.
 
@@ -190,6 +194,22 @@ exit 0
 fi
 
 REPO=${POS[1]}
+
+# Rule 8 comes from its one owner file, resolved from this script's own code
+# root because FM_ROOT_OVERRIDE may name a home that is not a checkout. awk
+# exits 1 unless one rule-start precedes one rule-end with non-blank text
+# between, and mkdir waits for that so an aborted scaffold leaves nothing.
+RULE_FILE="$SCRIPT_DIR/../docs/repo-text-rule.md"
+[ -r "$RULE_FILE" ] || { echo "error: repo-text rule owner file missing: $RULE_FILE" >&2; exit 1; }
+RULE8=$(awk '
+  /^<!-- rule-start -->$/ { if (starts++ || ends) exit 1; on = 1; next }
+  /^<!-- rule-end -->$/ { if (ends++ || !starts) exit 1; on = 0; next }
+  on { if (n++ == 0) print "8. " $0; else print "   " $0; if ($0 ~ /[^[:space:]]/) text = 1 }
+  END { if (starts != 1 || ends != 1 || !text) exit 1 }
+' "$RULE_FILE") || { echo "error: $RULE_FILE needs exactly one rule-start and one rule-end marker, in that order, with rule text between them" >&2; exit 1; }
+RULE8="$RULE8
+   Run \`$FM_ROOT/bin/fm-text-check.sh --staged\` before each commit and act on what it lists."
+mkdir -p "$DATA/$ID"
 
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
@@ -259,12 +279,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
-8. All outward-facing text you author (PR titles and descriptions, commit messages, code comments,
-   review comments, issue text) must be plain engineering prose written for the target repo's human
-   audience - never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate,
-   "brief"/"task brief" as workflow terms, narration about your own worktree or pipeline, nautical
-   phrasing). Self-check outward text against this rule before publishing it (opening a PR,
-   pushing a commit, posting a comment).
+$RULE8
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -291,7 +306,7 @@ case "$MODE" in
 # Definition of done
 This project ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
+When it is implemented and committed, push your branch and open a PR with \`gh-axi\` whose description follows the PR/MR shape in rule 8, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
 )
@@ -328,7 +343,9 @@ Two firstmate-specific rules layer on top of that guidance:
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
 - Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), rewrite the PR description with \`gh-axi pr edit\` to the PR/MR shape in rule 8, keeping only the \`## Pipeline\` signature section that CI requires.
+The edit re-runs the body-compliance check, so before reporting done confirm with \`gh-axi pr view {number} --full\` that the \`Updates from [git push no-mistakes]\` marker line is still in the body and that the re-triggered check passed.
+Then append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
 )
     ;;
@@ -375,12 +392,7 @@ $RULE1
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
-8. All outward-facing text you author (PR titles and descriptions, commit messages, code comments,
-   review comments, issue text) must be plain engineering prose written for the target repo's human
-   audience - never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate,
-   "brief"/"task brief" as workflow terms, narration about your own worktree or pipeline, nautical
-   phrasing). Self-check outward text against this rule before publishing it (opening a PR,
-   pushing a commit, posting a comment).
+$RULE8
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
