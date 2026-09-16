@@ -37,7 +37,7 @@
 # Rule 8 (comments, commit messages, PR/MR text) is not written here: ship and
 # scout scaffolds inline the marked block of docs/repo-text-rule.md and append
 # the bin/fm-text-check.sh --staged instruction, so that doc is the rule's only
-# owner. A missing or empty rule block aborts the scaffold.
+# owner. A missing, empty, doubled, or unterminated rule block aborts the scaffold.
 # Scout tasks ignore mode - their deliverable is a report, not a merge.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
@@ -196,18 +196,17 @@ fi
 REPO=${POS[1]}
 
 # Rule 8 comes from its one owner file, resolved from this script's own code
-# root because FM_ROOT_OVERRIDE may name a home that is not a checkout. The
-# doc's marker comments delimit the exact text so its surrounding prose stays
-# out of the brief. The task directory is created only once the rule is in
-# hand, so an aborted scaffold leaves nothing behind.
+# root because FM_ROOT_OVERRIDE may name a home that is not a checkout. awk
+# exits 1 unless one rule-start precedes one rule-end with non-blank text
+# between, and mkdir waits for that so an aborted scaffold leaves nothing.
 RULE_FILE="$SCRIPT_DIR/../docs/repo-text-rule.md"
 [ -r "$RULE_FILE" ] || { echo "error: repo-text rule owner file missing: $RULE_FILE" >&2; exit 1; }
 RULE8=$(awk '
-  /^<!-- rule-start -->$/ { on = 1; next }
-  /^<!-- rule-end -->$/ { on = 0 }
-  on { if (n++ == 0) print "8. " $0; else print "   " $0 }
-' "$RULE_FILE")
-[ -n "$RULE8" ] || { echo "error: no rule block between rule-start and rule-end markers in $RULE_FILE" >&2; exit 1; }
+  /^<!-- rule-start -->$/ { if (starts++ || ends) exit 1; on = 1; next }
+  /^<!-- rule-end -->$/ { if (ends++ || !starts) exit 1; on = 0; next }
+  on { if (n++ == 0) print "8. " $0; else print "   " $0; if ($0 ~ /[^[:space:]]/) text = 1 }
+  END { if (starts != 1 || ends != 1 || !text) exit 1 }
+' "$RULE_FILE") || { echo "error: $RULE_FILE needs exactly one rule-start and one rule-end marker, in that order, with rule text between them" >&2; exit 1; }
 RULE8="$RULE8
    Run \`$FM_ROOT/bin/fm-text-check.sh --staged\` before each commit and act on what it lists."
 mkdir -p "$DATA/$ID"
@@ -345,6 +344,7 @@ Two firstmate-specific rules layer on top of that guidance:
 - Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), rewrite the PR description with \`gh-axi pr edit\` to the PR/MR shape in rule 8, keeping only the \`## Pipeline\` signature section that CI requires.
+The edit re-runs the body-compliance check, so before reporting done confirm with \`gh-axi pr view --json body\` that the \`Updates from [git push no-mistakes]\` marker line is still in the body and that the re-triggered check passed.
 Then append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
 )

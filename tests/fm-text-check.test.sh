@@ -7,6 +7,8 @@
 # message subject length, body word count, and agent co-author trailers. The
 # exit contract is asserted both ways: 0 with findings by default, 1 only under
 # --strict, silence plus 0 on a clean diff, and 2 when git rejects the range.
+# The banned-phrase list is held to its owner, the marked block of
+# docs/repo-text-rule.md, through --list-phrases.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -51,8 +53,10 @@ echo hi
 SH
   cat > "$repo/q.sql" <<'SQL'
 -- honestly this is by definition fine → no
+-- Truthfully it maps cleanly onto the schema
 select 1;
 select 2;
+select 3;
 SQL
   git -C "$repo" add -A
   out=$(cd "$repo" && "$CHECK" --staged)
@@ -65,9 +69,33 @@ SQL
   assert_contains "$out" "q.sql:1: arrow:" "Unicode arrow in a dash-comment file must be listed"
   assert_contains "$out" 'q.sql:1: "honestly":' "banned phrase 'honestly' must be listed"
   assert_contains "$out" 'q.sql:1: "by definition":' "banned phrase 'by definition' must be listed"
+  assert_contains "$out" 'q.sql:2: "truthful":' "the stem 'truthful' must list 'Truthfully' regardless of case"
+  assert_contains "$out" 'q.sql:2: "cleanly":' "banned phrase 'cleanly' must be listed"
   assert_not_contains "$out" "tool.sh:1" "a shebang is not a comment line"
   assert_not_contains "$out" "app.js:4" "a trailing comment after code is not scanned as a comment line"
   pass "fm-text-check.sh: lists each voice tell on added comment lines with file:line"
+}
+
+# Every phrase the checker flags must be named inside the rule block that
+# docs/repo-text-rule.md owns, so a worker who follows the rule exactly is never
+# flagged for a phrase the rule does not mention.
+test_banned_phrases_are_named_by_the_owner_doc() {
+  local phrases block phrase rc
+  phrases=$("$CHECK" --list-phrases); rc=$?
+  expect_code 0 "$rc" "--list-phrases must exit 0"
+  [ "$(printf '%s\n' "$phrases" | wc -l | tr -d ' ')" -ge 3 ] || fail "--list-phrases printed too few phrases: $phrases"
+  block=$(awk '/^<!-- rule-start -->$/ { on = 1; next } /^<!-- rule-end -->$/ { on = 0 } on' "$ROOT/docs/repo-text-rule.md" | tr '[:upper:]' '[:lower:]')
+  [ -n "$block" ] || fail "docs/repo-text-rule.md has no marker-delimited rule block"
+  while IFS= read -r phrase; do
+    [ -n "$phrase" ] || fail "--list-phrases printed an empty line"
+    case "$block" in
+      *"$phrase"*) ;;
+      *) fail "checker flags \"$phrase\" but the rule block in docs/repo-text-rule.md never names it" ;;
+    esac
+  done <<EOF
+$phrases
+EOF
+  pass "fm-text-check.sh: every banned phrase is named inside the owner doc's rule block"
 }
 
 test_long_comment_block_and_density() {
@@ -221,6 +249,7 @@ test_strict_and_clean_exit_codes() {
 
 test_script_parses_and_helps
 test_comment_tells_are_listed_per_line
+test_banned_phrases_are_named_by_the_owner_doc
 test_long_comment_block_and_density
 test_markdown_and_data_files_have_no_comment_lines
 test_message_checks_only_from_message_file

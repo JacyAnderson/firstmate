@@ -121,8 +121,10 @@ test_no_mistakes_dod_wording() {
 
 # Both PR-based delivery modes make the worker responsible for the PR
 # description's shape: the pipeline path rewrites the generated description
-# after CI is green and before reporting done, the direct path writes it that
-# way when opening the PR. local-only opens no PR and must not carry either.
+# after CI is green, confirms the CI marker survived and the re-triggered body
+# check passed, and only then reports done; the direct path writes the
+# description that way when opening the PR. local-only opens no PR and must not
+# carry either.
 test_pr_modes_require_rule8_description() {
   local home id brief
   home="$TMP_ROOT/pr-description-home"
@@ -137,8 +139,12 @@ test_pr_modes_require_rule8_description() {
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep 'keeping only the `## Pipeline` signature section that CI requires' "$brief" \
     "no-mistakes DOD must preserve the CI-required signature section"
-  assert_grep "Then append \`done: PR {url} checks green\` and stop." "$brief" \
-    "no-mistakes DOD must report done only after the description rewrite"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'confirm with `gh-axi pr view --json body` that the `Updates from [git push no-mistakes]` marker line is still in the body and that the re-triggered check passed' "$brief" \
+    "no-mistakes DOD must have the worker confirm the CI marker survived the rewrite"
+  assert_contains "$(cat "$brief")" "marker line is still in the body and that the re-triggered check passed.
+Then append \`done: PR {url} checks green\` and stop." \
+    "no-mistakes DOD must report done only after the rewrite and the marker check"
 
   id="brief-prdesc-direct"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj >/dev/null 2>&1
@@ -147,6 +153,8 @@ test_pr_modes_require_rule8_description() {
     "direct-PR DOD must require a rule 8 PR description when opening the PR"
   assert_no_grep "gh-axi pr edit" "$brief" \
     "direct-PR DOD has no pipeline-written description to rewrite"
+  assert_no_grep "re-triggered check" "$brief" \
+    "direct-PR DOD has no pipeline body check to re-trigger"
 
   id="brief-prdesc-local"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj >/dev/null 2>&1
@@ -398,10 +406,11 @@ test_ship_and_scout_inline_repo_text_rule() {
 }
 
 # The scaffold reads the owner file at scaffold time: with a fake code root, a
-# missing or marker-less file aborts without creating the task directory, and a
-# fixture rule block is what the brief carries, not the checked-in rule.
+# missing, marker-less, blank, unterminated, or doubled rule block aborts
+# without creating the task directory, and a fixture rule block is what the
+# brief carries, not the checked-in rule.
 test_repo_text_rule_is_read_from_owner_file() {
-  local home fake out rc brief
+  local home fake out rc brief label
   home="$TMP_ROOT/missing-rule-home"
   fake="$TMP_ROOT/fake-root"
   mkdir -p "$home/data" "$fake/docs"
@@ -413,8 +422,19 @@ test_repo_text_rule_is_read_from_owner_file() {
   printf '# Rule\n\nProse with no markers.\n' > "$fake/docs/repo-text-rule.md"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-norule-b firstmate 2>&1); rc=$?
   expect_code 1 "$rc" "scaffold must fail when the owner file has no rule block"
-  assert_contains "$out" "no rule block between rule-start and rule-end markers" "empty rule block must be named in the error"
+  assert_contains "$out" "exactly one rule-start and one rule-end marker" "a marker-less file must be named in the error"
   assert_absent "$home/data/brief-norule-b" "an aborted ship scaffold must not leave a task directory behind"
+  for label in blank unterminated doubled; do
+    case "$label" in
+      blank) printf '<!-- rule-start -->\n\n   \n<!-- rule-end -->\n' > "$fake/docs/repo-text-rule.md" ;;
+      unterminated) printf '<!-- rule-start -->\nRule text.\n\nProse that must never become rule text.\n' > "$fake/docs/repo-text-rule.md" ;;
+      doubled) printf '<!-- rule-start -->\nFirst.\n<!-- rule-end -->\n<!-- rule-start -->\nSecond.\n<!-- rule-end -->\n' > "$fake/docs/repo-text-rule.md" ;;
+    esac
+    out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" "brief-norule-$label" firstmate 2>&1); rc=$?
+    expect_code 1 "$rc" "scaffold must fail on a $label rule block"
+    assert_contains "$out" "exactly one rule-start and one rule-end marker" "a $label rule block must be named in the error"
+    assert_absent "$home/data/brief-norule-$label" "a scaffold aborted on a $label rule block must not leave a task directory behind"
+  done
 
   cat > "$fake/docs/repo-text-rule.md" <<'EOF'
 # Fixture rule

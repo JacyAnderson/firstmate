@@ -5,6 +5,7 @@
 # comment is a genuine why; that stays with the writer.
 # Usage: fm-text-check.sh [--staged] [--message-file <file>] [--strict]
 #        fm-text-check.sh <range> [--strict]
+#        fm-text-check.sh --list-phrases
 #   Default (or --staged): reads `git diff --cached`. The commit message is
 #   checked only when --message-file names it (git's comment lines and scissors
 #   block are stripped, so a commit-msg hook can pass its argument); without
@@ -16,7 +17,10 @@
 # What it lists, one finding per line, nothing when clean:
 #   - added comment-only lines containing an em dash, a spaced hyphen between
 #     words, an arrow (->, =>, or the Unicode arrows), or a banned phrase
-#     (BANNED_PHRASES below; the list mirrors docs/repo-text-rule.md);
+#     (BANNED_PHRASES below, matched case-insensitively as word stems so an
+#     entry also lists its longer forms; tests/fm-text-check.test.sh holds
+#     every entry to the marked block of docs/repo-text-rule.md through
+#     --list-phrases, which prints the entries one per line);
 #   - added comment blocks longer than MAX_COMMENT_BLOCK lines, with file:line;
 #   - files whose added comment lines outnumber their added code lines;
 #   - a commit subject over MAX_SUBJECT_CHARS characters or a body over
@@ -38,7 +42,7 @@ usage() {
   ' "$0"
 }
 
-BANNED_PHRASES='note that|this ensures|in order to|previously|no longer|honestly|truthful|by definition'
+BANNED_PHRASES='note that|this ensures|in order to|previously|no longer|by definition|honestly|truthful|cleanly'
 MAX_COMMENT_BLOCK=4
 MAX_SUBJECT_CHARS=60
 MAX_BODY_WORDS=80
@@ -50,6 +54,7 @@ STRICT=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
+    --list-phrases) printf '%s\n' "$BANNED_PHRASES" | tr '|' '\n'; exit 0 ;;
     --staged) MODE=staged ;;
     --strict) STRICT=1 ;;
     --message-file)
@@ -107,7 +112,7 @@ function tells(text, where,    lower, i, re) {
   if (text ~ /[^[:space:]] - [^[:space:]]/) print where ": spaced hyphen as a dash: " text
   if (index(text, arrow) || index(text, darrow) || text ~ / (->|=>) /) print where ": arrow: " text
   for (i = 1; i <= nphrases; i++) {
-    re = "(^|[^[:alnum:]])" phrases[i] "([^[:alnum:]]|$)"
+    re = "(^|[^[:alnum:]])" phrases[i]
     if (lower ~ re) print where ": \"" phrases[i] "\": " text
   }
 }
