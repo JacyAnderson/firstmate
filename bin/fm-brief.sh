@@ -344,7 +344,7 @@ Two firstmate-specific rules layer on top of that guidance:
 - Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), rewrite the PR description with \`gh-axi pr edit\` to the PR/MR shape in rule 8, keeping only the \`## Pipeline\` signature section that CI requires.
-The edit re-runs the body-compliance check, so before reporting done confirm with \`gh-axi pr view --json body\` that the \`Updates from [git push no-mistakes]\` marker line is still in the body and that the re-triggered check passed.
+The edit re-runs the body-compliance check, so before reporting done confirm with \`gh-axi pr view {number} --full\` that the \`Updates from [git push no-mistakes]\` marker line is still in the body and that the re-triggered check passed.
 Then append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
 )

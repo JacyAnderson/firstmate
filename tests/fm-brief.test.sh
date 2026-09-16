@@ -140,7 +140,7 @@ test_pr_modes_require_rule8_description() {
   assert_grep 'keeping only the `## Pipeline` signature section that CI requires' "$brief" \
     "no-mistakes DOD must preserve the CI-required signature section"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep 'confirm with `gh-axi pr view --json body` that the `Updates from [git push no-mistakes]` marker line is still in the body and that the re-triggered check passed' "$brief" \
+  assert_grep 'confirm with `gh-axi pr view {number} --full` that the `Updates from [git push no-mistakes]` marker line is still in the body and that the re-triggered check passed' "$brief" \
     "no-mistakes DOD must have the worker confirm the CI marker survived the rewrite"
   assert_contains "$(cat "$brief")" "marker line is still in the body and that the re-triggered check passed.
 Then append \`done: PR {url} checks green\` and stop." \

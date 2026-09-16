@@ -217,7 +217,14 @@ test_range_mode_reads_commits_and_their_message() {
   out=$(cd "$repo" && "$CHECK" HEAD~2..HEAD)
   assert_contains "$out" 'a.sh:1: "in order to":' "a range must include every commit's added lines"
   assert_not_contains "$out" "em dash" "a range checks only the end revision's message"
-  pass "fm-text-check.sh: range mode diffs the commits and checks the end revision's message"
+  printf 'Note that the file wins\n' > "$repo/msg.txt"
+  out=$(cd "$repo" && "$CHECK" --message-file msg.txt HEAD~2..HEAD)
+  assert_contains "$out" 'message line 1: "note that": Note that the file wins' "--message-file must name the message checked in range mode"
+  assert_not_contains "$out" "Append y" "--message-file must replace the end revision's message, not add to it"
+  out=$(cd "$repo" && "$CHECK" HEAD~1 --message-file msg.txt)
+  assert_contains "$out" 'message line 1: "note that":' "--message-file must override a single revision's message too"
+  assert_not_contains "$out" "em dash" "a single revision's own message must not be checked when --message-file is given"
+  pass "fm-text-check.sh: range mode diffs the commits and checks the end revision's message unless --message-file names one"
 }
 
 test_strict_and_clean_exit_codes() {

@@ -4,7 +4,7 @@
 # the writer can reread them before committing. It never judges whether a
 # comment is a genuine why; that stays with the writer.
 # Usage: fm-text-check.sh [--staged] [--message-file <file>] [--strict]
-#        fm-text-check.sh <range> [--strict]
+#        fm-text-check.sh <range> [--message-file <file>] [--strict]
 #        fm-text-check.sh --list-phrases
 #   Default (or --staged): reads `git diff --cached`. The commit message is
 #   checked only when --message-file names it (git's comment lines and scissors
@@ -13,10 +13,12 @@
 #   previous commit's message, not the one being prepared.
 #   <range>: any `git diff` range such as main..HEAD or A...B; a single revision
 #   R means R^! (that one commit). The message checked is the range's end
-#   revision (HEAD when the range ends in ..).
+#   revision (HEAD when the range ends in ..), or the --message-file when
+#   given, so the flag names the message to check in both modes.
 # What it lists, one finding per line, nothing when clean:
 #   - added comment-only lines containing an em dash, a spaced hyphen between
-#     words, an arrow (->, =>, or the Unicode arrows), or a banned phrase
+#     words, an arrow (the Unicode arrows, or -> and => when spaced), or a
+#     banned phrase
 #     (BANNED_PHRASES below, matched case-insensitively as word stems so an
 #     entry also lists its longer forms; tests/fm-text-check.test.sh holds
 #     every entry to the marked block of docs/repo-text-rule.md through
@@ -85,14 +87,16 @@ diff_text() {
 # Prints the commit message to check, or nothing when none is available.
 message_text() {
   local end
+  if [ -n "$MESSAGE_FILE" ]; then
+    awk '/^# -+ >8 -+$/ { exit } !/^#/' "$MESSAGE_FILE"
+    return
+  fi
   case "$MODE" in
     range)
       end=${RANGE##*..}
       [ -n "$end" ] || end=HEAD
       git log -1 --format=%B "$end" ;;
-    staged)
-      [ -n "$MESSAGE_FILE" ] || return 0
-      awk '/^# -+ >8 -+$/ { exit } !/^#/' "$MESSAGE_FILE" ;;
+    staged) return 0 ;;
   esac
 }
 
