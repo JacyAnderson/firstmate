@@ -5,10 +5,11 @@
 # comment is a genuine why; that stays with the writer.
 # Usage: fm-text-check.sh [--staged] [--message-file <file>] [--strict]
 #        fm-text-check.sh <range> [--strict]
-#   Default (or --staged): reads `git diff --cached`. The commit message comes
-#   from --message-file when given, else from .git/COMMIT_EDITMSG when it
-#   exists (git's comment lines and scissors block are stripped), else no
-#   message checks run.
+#   Default (or --staged): reads `git diff --cached`. The commit message is
+#   checked only when --message-file names it (git's comment lines and scissors
+#   block are stripped, so a commit-msg hook can pass its argument); without
+#   the flag no message checks run, because .git/COMMIT_EDITMSG holds the
+#   previous commit's message, not the one being prepared.
 #   <range>: any `git diff` range such as main..HEAD or A...B; a single revision
 #   R means R^! (that one commit). The message checked is the range's end
 #   revision (HEAD when the range ends in ..).
@@ -78,20 +79,15 @@ diff_text() {
 
 # Prints the commit message to check, or nothing when none is available.
 message_text() {
-  local end editmsg
+  local end
   case "$MODE" in
     range)
       end=${RANGE##*..}
       [ -n "$end" ] || end=HEAD
-      git log -1 --format=%B "$end" 2>/dev/null ;;
+      git log -1 --format=%B "$end" ;;
     staged)
-      if [ -n "$MESSAGE_FILE" ]; then
-        editmsg=$MESSAGE_FILE
-      else
-        editmsg=$(git rev-parse --git-path COMMIT_EDITMSG)
-        [ -f "$editmsg" ] || return 0
-      fi
-      awk '/^# -+ >8 -+$/ { exit } !/^#/' "$editmsg" ;;
+      [ -n "$MESSAGE_FILE" ] || return 0
+      awk '/^# -+ >8 -+$/ { exit } !/^#/' "$MESSAGE_FILE" ;;
   esac
 }
 
@@ -167,9 +163,10 @@ function end_file() {
   end_block()
   if (file != "" && comments[file] > code[file]) print file ": " comments[file] " comment lines added vs " code[file] " code lines"
 }
-/^\+\+\+ / { end_file(); file = substr($0, 5); fstyle = style(file); inblock = 0; comments[file] += 0; code[file] += 0; next }
+/^diff --git / { inheader = 1; next }
+inheader && /^\+\+\+ / { end_file(); file = substr($0, 5); fstyle = style(file); inblock = 0; comments[file] += 0; code[file] += 0; next }
 /^@@ / {
-  end_block(); inblock = 0
+  inheader = 0; end_block(); inblock = 0
   split($3, pos, ","); lineno = substr(pos[1], 2) + 0
   next
 }
@@ -214,11 +211,14 @@ if [ -n "$MESSAGE_FILE" ] && [ ! -r "$MESSAGE_FILE" ]; then
   exit 2
 fi
 
+DIFF=$(diff_text) || { echo "error: git diff failed for ${RANGE:-the index}" >&2; exit 2; }
+MESSAGE=$(message_text) || { echo "error: git log failed for the end of $RANGE" >&2; exit 2; }
+
 run_checks() {
-  diff_text | awk -f "$AWK_DIR/tells.awk" -f "$AWK_DIR/diff.awk" \
+  printf '%s\n' "$DIFF" | awk -f "$AWK_DIR/tells.awk" -f "$AWK_DIR/diff.awk" \
     -v emdash="$EM_DASH" -v arrow="$ARROW_RIGHT" -v darrow="$ARROW_DOUBLE" \
     -v banned="$BANNED_PHRASES" -v maxblock="$MAX_COMMENT_BLOCK"
-  message_text | awk -f "$AWK_DIR/tells.awk" -f "$AWK_DIR/message.awk" \
+  printf '%s\n' "$MESSAGE" | awk -f "$AWK_DIR/tells.awk" -f "$AWK_DIR/message.awk" \
     -v emdash="$EM_DASH" -v arrow="$ARROW_RIGHT" -v darrow="$ARROW_DOUBLE" \
     -v banned="$BANNED_PHRASES" -v maxsubject="$MAX_SUBJECT_CHARS" -v maxbody="$MAX_BODY_WORDS"
 }

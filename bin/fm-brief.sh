@@ -101,7 +101,6 @@ fi
 
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
-mkdir -p "$DATA/$ID"
 
 shell_quote() {
   printf "'"
@@ -132,6 +131,7 @@ else
   PROJECT_CLONES_BODY=$(printf '%s\n' "$SECONDMATE_PROJECTS" | tr ' ' '\n' | sed 's/^/- /')
   PROJECT_CLONES_NOTE="The projects above are local clones for work you supervise; they are not an exclusive ownership claim."
 fi
+mkdir -p "$DATA/$ID"
 cat > "$BRIEF" <<EOF
 You are a persistent second mate managed by the main firstmate. Work on your own; do not wait for a human.
 
@@ -198,7 +198,8 @@ REPO=${POS[1]}
 # Rule 8 comes from its one owner file, resolved from this script's own code
 # root because FM_ROOT_OVERRIDE may name a home that is not a checkout. The
 # doc's marker comments delimit the exact text so its surrounding prose stays
-# out of the brief.
+# out of the brief. The task directory is created only once the rule is in
+# hand, so an aborted scaffold leaves nothing behind.
 RULE_FILE="$SCRIPT_DIR/../docs/repo-text-rule.md"
 [ -r "$RULE_FILE" ] || { echo "error: repo-text rule owner file missing: $RULE_FILE" >&2; exit 1; }
 RULE8=$(awk '
@@ -209,6 +210,7 @@ RULE8=$(awk '
 [ -n "$RULE8" ] || { echo "error: no rule block between rule-start and rule-end markers in $RULE_FILE" >&2; exit 1; }
 RULE8="$RULE8
    Run \`$FM_ROOT/bin/fm-text-check.sh --staged\` before each commit and act on what it lists."
+mkdir -p "$DATA/$ID"
 
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")

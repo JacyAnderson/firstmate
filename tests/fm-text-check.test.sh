@@ -6,7 +6,7 @@
 # phrases), comment blocks over the limit, comment-heavy files, and commit
 # message subject length, body word count, and agent co-author trailers. The
 # exit contract is asserted both ways: 0 with findings by default, 1 only under
-# --strict, and silence plus 0 on a clean diff.
+# --strict, silence plus 0 on a clean diff, and 2 when git rejects the range.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -113,18 +113,23 @@ test_markdown_and_data_files_have_no_comment_lines() {
   printf '# Heading — em dash in prose\n\nNote that this is prose.\n' > "$repo/notes.md"
   printf '{"a": 1}\n' > "$repo/data.json"
   git -C "$repo" add -A
-  rm -f "$repo/.git/COMMIT_EDITMSG"
   out=$(cd "$repo" && "$CHECK" --staged)
   [ -z "$out" ] || fail "Markdown and data files must produce no findings (got: $out)"
   pass "fm-text-check.sh: Markdown and data files have no comment lines"
 }
 
-test_message_checks_from_file_and_editmsg() {
+test_message_checks_only_from_message_file() {
   local repo out rc
   repo="$TMP_ROOT/message"
   new_repo "$repo"
   printf 'x=1\n' > "$repo/a.sh"
   git -C "$repo" add -A
+  git -C "$repo" commit -q -m "First commit — em dash here"
+  printf 'y=2\n' >> "$repo/a.sh"
+  git -C "$repo" add -A
+  [ -f "$repo/.git/COMMIT_EDITMSG" ] || fail "fixture expected git to leave COMMIT_EDITMSG behind after a commit"
+  out=$(cd "$repo" && "$CHECK" --staged)
+  assert_not_contains "$out" "message" "staged mode without --message-file must not read the previous commit's COMMIT_EDITMSG"
   {
     printf 'A very long subject line that goes well past the sixty character limit\n\n'
     yes word | head -85 | tr '\n' ' '
@@ -136,19 +141,36 @@ test_message_checks_from_file_and_editmsg() {
   assert_contains "$out" "message: body is 89 words (limit 80)" "an over-long body must be listed with its word count"
   assert_contains "$out" "message: agent co-author trailer: Co-Authored-By: Claude Fable" "an agent co-author trailer must be listed"
 
-  # COMMIT_EDITMSG is the default message source when no file is given; git's
-  # comment lines and anything below the scissors line are not part of it.
+  # A commit-msg hook passes git's own editor file, whose comment lines and
+  # scissors block are not part of the message.
   {
     printf 'Short subject — with an em dash\n\n# Please enter the commit message\n'
     printf '# ------------------------ >8 ------------------------\n'
     yes word | head -200 | tr '\n' ' '
     printf '\n'
-  } > "$repo/.git/COMMIT_EDITMSG"
-  out=$(cd "$repo" && "$CHECK" --staged)
+  } > "$repo/editmsg.txt"
+  out=$(cd "$repo" && "$CHECK" --staged --message-file=editmsg.txt)
   assert_contains "$out" "message line 1: em dash: Short subject" "the message itself is scanned for voice tells"
   assert_not_contains "$out" "message: body is" "text below the scissors line must not count toward the body"
   assert_not_contains "$out" "message: subject is" "a 31-character subject is within the limit"
-  pass "fm-text-check.sh: checks subject length, body words, trailers, and tells in the commit message"
+  pass "fm-text-check.sh: checks the commit message only when --message-file names it"
+}
+
+test_plus_plus_code_line_is_not_a_file_header() {
+  local repo out
+  repo="$TMP_ROOT/plusplus"
+  new_repo "$repo"
+  cat > "$repo/loop.c" <<'C'
+int i = 0;
+while (i < 3)
+++ i;
+// Note that i is three here
+C
+  git -C "$repo" add -A
+  out=$(cd "$repo" && "$CHECK" --staged)
+  assert_contains "$out" 'loop.c:4: "note that":' "a comment after a ++ code line must stay attributed to the real file"
+  assert_not_contains "$out" "i;:" "an added line starting with ++ must not be read as a +++ file header"
+  pass "fm-text-check.sh: only a header +++ line switches the file being counted"
 }
 
 test_range_mode_reads_commits_and_their_message() {
@@ -176,7 +198,6 @@ test_strict_and_clean_exit_codes() {
   new_repo "$repo"
   printf '# Note that x\nx=1\n' > "$repo/a.sh"
   git -C "$repo" add -A
-  rm -f "$repo/.git/COMMIT_EDITMSG"
   (cd "$repo" && "$CHECK" --strict >/dev/null); rc=$?
   expect_code 1 "$rc" "--strict must exit 1 when anything was listed"
   (cd "$repo" && "$CHECK" >/dev/null); rc=$?
@@ -190,13 +211,19 @@ test_strict_and_clean_exit_codes() {
 
   (cd "$TMP_ROOT" && "$CHECK" --bogus >/dev/null 2>&1); rc=$?
   expect_code 2 "$rc" "an unknown option must exit 2"
-  pass "fm-text-check.sh: exit 0 by default, 1 under --strict with findings, 2 on usage errors"
+  out=$(cd "$repo" && "$CHECK" nonexistent..HEAD 2>&1); rc=$?
+  expect_code 2 "$rc" "a range git cannot resolve must exit 2"
+  assert_contains "$out" "error: git diff failed" "a failed git diff must be reported"
+  (cd "$repo" && "$CHECK" nonexistent --strict >/dev/null 2>&1); rc=$?
+  expect_code 2 "$rc" "a bogus single revision must exit 2 under --strict, not pass as clean"
+  pass "fm-text-check.sh: exit 0 by default, 1 under --strict with findings, 2 on usage and git errors"
 }
 
 test_script_parses_and_helps
 test_comment_tells_are_listed_per_line
 test_long_comment_block_and_density
 test_markdown_and_data_files_have_no_comment_lines
-test_message_checks_from_file_and_editmsg
+test_message_checks_only_from_message_file
+test_plus_plus_code_line_is_not_a_file_header
 test_range_mode_reads_commits_and_their_message
 test_strict_and_clean_exit_codes

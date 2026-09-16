@@ -321,13 +321,25 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
+# render_rule8 <owner-file>: the block between the rule-start and rule-end
+# markers shaped as the brief must carry it (first line "8. ", the rest indented
+# three spaces). This is the generated-brief contract fm-brief.sh owns.
+render_rule8() {
+  awk '
+    /^<!-- rule-start -->$/ { on = 1; next }
+    /^<!-- rule-end -->$/ { on = 0 }
+    on { if (n++ == 0) print "8. " $0; else print "   " $0 }
+  ' "$1"
+}
+
 # Ship and scout scaffolds inline rule 8 from its one owner file,
-# docs/repo-text-rule.md, and append the fm-text-check.sh instruction, so the
-# rule text itself is never duplicated in the script.
+# docs/repo-text-rule.md, and append the fm-text-check.sh instruction.
 test_ship_and_scout_inline_repo_text_rule() {
-  local home kind id brief
+  local home kind id brief expected content
   home="$TMP_ROOT/repo-text-rule-home"
   mkdir -p "$home/data"
+  expected=$(render_rule8 "$ROOT/docs/repo-text-rule.md")
+  [ -n "$expected" ] || fail "docs/repo-text-rule.md has no marker-delimited rule block to compare against"
   for kind in ship scout; do
     id="brief-repotext-$kind"
     if [ "$kind" = scout ]; then
@@ -336,29 +348,23 @@ test_ship_and_scout_inline_repo_text_rule() {
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate >/dev/null 2>&1
     fi
     brief="$home/data/$id/brief.md"
-    assert_grep "8. Everything you write into the repo (code comments, commit messages, PR/MR titles and" "$brief" \
-      "$kind brief lost the repo-text rule as rule 8"
-    assert_grep "   - Commit subject: imperative, under 60 characters." "$brief" \
-      "$kind brief lost the commit-shape rule (indented under rule 8)"
-    assert_grep "No agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate," "$brief" \
-      "$kind brief lost the banned agent-workflow vocabulary list"
-    assert_grep "Before each commit, reread the staged diff's comments and the commit message against this rule" "$brief" \
-      "$kind brief lost the commit-time self-check sentence"
-    assert_grep "Run \`$ROOT/bin/fm-text-check.sh --staged\` before each commit and act on what it lists." "$brief" \
-      "$kind brief lost the advisory text-check instruction"
+    content=$(cat "$brief")
+    assert_contains "$content" "$expected" \
+      "$kind brief must carry the owner file's rule block verbatim as rule 8"
+    assert_contains "$content" "$expected
+   Run \`$ROOT/bin/fm-text-check.sh --staged\` before each commit and act on what it lists." \
+      "$kind brief must follow rule 8 with the advisory text-check instruction"
     assert_no_grep "<!-- rule-" "$brief" "$kind brief leaked the owner file's marker comments"
     assert_no_grep "All outward-facing text you author" "$brief" "$kind brief still carries the superseded rule 8 wording"
   done
-  # The rule text has one owner: the scaffold script must not restate it.
-  assert_no_grep "Everything you write into the repo" "$ROOT/bin/fm-brief.sh" \
-    "fm-brief.sh must inline docs/repo-text-rule.md, not carry its own copy of the rule"
   pass "fm-brief.sh: ship and scout scaffolds inline rule 8 from docs/repo-text-rule.md"
 }
 
-# A missing or marker-less owner file must abort the scaffold instead of
-# emitting a brief with no rule 8.
-test_missing_repo_text_rule_aborts_scaffold() {
-  local home fake out rc
+# The scaffold reads the owner file at scaffold time: with a fake code root, a
+# missing or marker-less file aborts without creating the task directory, and a
+# fixture rule block is what the brief carries, not the checked-in rule.
+test_repo_text_rule_is_read_from_owner_file() {
+  local home fake out rc brief
   home="$TMP_ROOT/missing-rule-home"
   fake="$TMP_ROOT/fake-root"
   mkdir -p "$home/data" "$fake/docs"
@@ -366,12 +372,36 @@ test_missing_repo_text_rule_aborts_scaffold() {
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-norule-a firstmate --scout 2>&1); rc=$?
   expect_code 1 "$rc" "scaffold must fail when docs/repo-text-rule.md is missing"
   assert_contains "$out" "repo-text rule owner file missing" "missing owner file must be named in the error"
-  assert_absent "$home/data/brief-norule-a/brief.md" "no brief may be written without the rule"
+  assert_absent "$home/data/brief-norule-a" "an aborted scaffold must not leave a task directory behind"
   printf '# Rule\n\nProse with no markers.\n' > "$fake/docs/repo-text-rule.md"
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-norule-b firstmate --scout 2>&1); rc=$?
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-norule-b firstmate 2>&1); rc=$?
   expect_code 1 "$rc" "scaffold must fail when the owner file has no rule block"
   assert_contains "$out" "no rule block between rule-start and rule-end markers" "empty rule block must be named in the error"
-  pass "fm-brief.sh: a missing or empty repo-text rule aborts the scaffold"
+  assert_absent "$home/data/brief-norule-b" "an aborted ship scaffold must not leave a task directory behind"
+
+  cat > "$fake/docs/repo-text-rule.md" <<'EOF'
+# Fixture rule
+
+Prose above the block stays out of the brief.
+
+<!-- rule-start -->
+Fixture rule line one for the brief.
+- Fixture continuation line two.
+<!-- rule-end -->
+
+Prose below the block stays out too.
+EOF
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-fixture-rule firstmate >/dev/null 2>&1
+  brief="$home/data/brief-fixture-rule/brief.md"
+  assert_present "$brief" "a scaffold with a valid fixture rule must write the brief"
+  assert_contains "$(cat "$brief")" "8. Fixture rule line one for the brief.
+   - Fixture continuation line two.
+   Run \`$fake/bin/fm-text-check.sh --staged\` before each commit and act on what it lists." \
+    "the brief must render the fixture rule block as rule 8"
+  assert_no_grep "Prose above the block" "$brief" "prose outside the markers must not reach the brief"
+  assert_no_grep "Everything you write into the repo" "$brief" \
+    "the brief must take rule 8 from the owner file, not from a copy inside fm-brief.sh"
+  pass "fm-brief.sh: rule 8 is read from the owner file, and a missing rule aborts cleanly"
 }
 
 # Task branches are named with the bare task slug; the fm/ namespace is gone
@@ -435,6 +465,6 @@ test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_ship_and_scout_inline_repo_text_rule
-test_missing_repo_text_rule_aborts_scaffold
+test_repo_text_rule_is_read_from_owner_file
 test_ship_briefs_use_bare_slug_branch
 test_scout_and_secondmate_scaffold
