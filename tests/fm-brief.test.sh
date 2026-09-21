@@ -119,6 +119,51 @@ test_no_mistakes_dod_wording() {
   pass "fm-brief.sh: no-mistakes DOD wording avoids the apostrophe regression"
 }
 
+# Both PR-based delivery modes make the worker responsible for the PR
+# description's shape: the pipeline path rewrites the generated description
+# after CI is green, confirms the CI marker survived and the re-triggered body
+# check passed, and only then reports done; the direct path writes the
+# description that way when opening the PR. local-only opens no PR and must not
+# carry either.
+test_pr_modes_require_rule8_description() {
+  local home id brief
+  home="$TMP_ROOT/pr-description-home"
+  write_registry "$home"
+
+  id="brief-prdesc-nm"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" no-registry-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'rewrite the PR description with `gh-axi pr edit` to the PR/MR shape in rule 8' "$brief" \
+    "no-mistakes DOD must have the worker rewrite the pipeline-written PR description"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'keeping only the `## Pipeline` signature section that CI requires' "$brief" \
+    "no-mistakes DOD must preserve the CI-required signature section"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'confirm with `gh-axi pr view {number} --full` that the `Updates from [git push no-mistakes]` marker line is still in the body and that the re-triggered check passed' "$brief" \
+    "no-mistakes DOD must have the worker confirm the CI marker survived the rewrite"
+  assert_contains "$(cat "$brief")" "marker line is still in the body and that the re-triggered check passed.
+Then append \`done: PR {url} checks green\` and stop." \
+    "no-mistakes DOD must report done only after the rewrite and the marker check"
+
+  id="brief-prdesc-direct"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "whose description follows the PR/MR shape in rule 8" "$brief" \
+    "direct-PR DOD must require a rule 8 PR description when opening the PR"
+  assert_no_grep "gh-axi pr edit" "$brief" \
+    "direct-PR DOD has no pipeline-written description to rewrite"
+  assert_no_grep "re-triggered check" "$brief" \
+    "direct-PR DOD has no pipeline body check to re-trigger"
+
+  id="brief-prdesc-local"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_no_grep "PR/MR shape" "$brief" \
+    "local-only DOD opens no PR and must not carry a PR description step"
+  pass "fm-brief.sh: PR-based definitions of done require a rule 8 PR description"
+}
+
 test_ship_project_memory_wording() {
   local home id brief
   home="$TMP_ROOT/project-memory-home"
@@ -321,28 +366,99 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
-# Ship and scout scaffolds carry the standing outward-language rule so workers
-# never leak agent-workflow vocabulary into PRs, commits, comments, or issues.
-test_ship_and_scout_carry_outward_language_rule() {
-  local home kind id brief
-  home="$TMP_ROOT/outward-language-home"
+# render_rule8 <owner-file>: the block between the rule-start and rule-end
+# markers shaped as the brief must carry it (first line "8. ", the rest indented
+# three spaces). This is the generated-brief contract fm-brief.sh owns.
+render_rule8() {
+  awk '
+    /^<!-- rule-start -->$/ { on = 1; next }
+    /^<!-- rule-end -->$/ { on = 0 }
+    on { if (n++ == 0) print "8. " $0; else print "   " $0 }
+  ' "$1"
+}
+
+# Ship and scout scaffolds inline rule 8 from its one owner file,
+# docs/repo-text-rule.md, and append the fm-text-check.sh instruction.
+test_ship_and_scout_inline_repo_text_rule() {
+  local home kind id brief expected content
+  home="$TMP_ROOT/repo-text-rule-home"
   mkdir -p "$home/data"
+  expected=$(render_rule8 "$ROOT/docs/repo-text-rule.md")
+  [ -n "$expected" ] || fail "docs/repo-text-rule.md has no marker-delimited rule block to compare against"
   for kind in ship scout; do
-    id="brief-outward-$kind"
+    id="brief-repotext-$kind"
     if [ "$kind" = scout ]; then
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
     else
       FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate >/dev/null 2>&1
     fi
     brief="$home/data/$id/brief.md"
-    assert_grep "must be plain engineering prose written for the target repo's human" "$brief" \
-      "$kind brief lost the outward-language plain-prose requirement"
-    assert_grep "never agent-workflow vocabulary (captain, crewmate, firstmate, scout, secondmate," "$brief" \
-      "$kind brief lost the banned agent-workflow vocabulary list"
-    assert_grep "Self-check outward text against this rule before publishing" "$brief" \
-      "$kind brief lost the pre-publish self-check instruction"
+    content=$(cat "$brief")
+    assert_contains "$content" "$expected" \
+      "$kind brief must carry the owner file's rule block verbatim as rule 8"
+    assert_contains "$content" "$expected
+   Run \`$ROOT/bin/fm-text-check.sh --staged\` before each commit and act on what it lists." \
+      "$kind brief must follow rule 8 with the advisory text-check instruction"
+    assert_no_grep "<!-- rule-" "$brief" "$kind brief leaked the owner file's marker comments"
+    assert_no_grep "All outward-facing text you author" "$brief" "$kind brief still carries the superseded rule 8 wording"
   done
-  pass "fm-brief.sh: ship and scout scaffolds carry the outward-language rule"
+  pass "fm-brief.sh: ship and scout scaffolds inline rule 8 from docs/repo-text-rule.md"
+}
+
+# The scaffold reads the owner file at scaffold time: with a fake code root, a
+# missing, marker-less, blank, unterminated, or doubled rule block aborts
+# without creating the task directory, and a fixture rule block is what the
+# brief carries, not the checked-in rule.
+test_repo_text_rule_is_read_from_owner_file() {
+  local home fake out rc brief label
+  home="$TMP_ROOT/missing-rule-home"
+  fake="$TMP_ROOT/fake-root"
+  mkdir -p "$home/data" "$fake/docs"
+  cp -R "$ROOT/bin" "$fake/bin"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-norule-a firstmate --scout 2>&1); rc=$?
+  expect_code 1 "$rc" "scaffold must fail when docs/repo-text-rule.md is missing"
+  assert_contains "$out" "repo-text rule owner file missing" "missing owner file must be named in the error"
+  assert_absent "$home/data/brief-norule-a" "an aborted scaffold must not leave a task directory behind"
+  printf '# Rule\n\nProse with no markers.\n' > "$fake/docs/repo-text-rule.md"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-norule-b firstmate 2>&1); rc=$?
+  expect_code 1 "$rc" "scaffold must fail when the owner file has no rule block"
+  assert_contains "$out" "exactly one rule-start and one rule-end marker" "a marker-less file must be named in the error"
+  assert_absent "$home/data/brief-norule-b" "an aborted ship scaffold must not leave a task directory behind"
+  for label in blank unterminated doubled; do
+    case "$label" in
+      blank) printf '<!-- rule-start -->\n\n   \n<!-- rule-end -->\n' > "$fake/docs/repo-text-rule.md" ;;
+      unterminated) printf '<!-- rule-start -->\nRule text.\n\nProse that must never become rule text.\n' > "$fake/docs/repo-text-rule.md" ;;
+      doubled) printf '<!-- rule-start -->\nFirst.\n<!-- rule-end -->\n<!-- rule-start -->\nSecond.\n<!-- rule-end -->\n' > "$fake/docs/repo-text-rule.md" ;;
+    esac
+    out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" "brief-norule-$label" firstmate 2>&1); rc=$?
+    expect_code 1 "$rc" "scaffold must fail on a $label rule block"
+    assert_contains "$out" "exactly one rule-start and one rule-end marker" "a $label rule block must be named in the error"
+    assert_absent "$home/data/brief-norule-$label" "a scaffold aborted on a $label rule block must not leave a task directory behind"
+  done
+
+  cat > "$fake/docs/repo-text-rule.md" <<'EOF'
+# Fixture rule
+
+Prose above the block stays out of the brief.
+
+<!-- rule-start -->
+Fixture rule line one for the brief.
+- Fixture continuation line two.
+<!-- rule-end -->
+
+Prose below the block stays out too.
+EOF
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$fake" "$fake/bin/fm-brief.sh" brief-fixture-rule firstmate >/dev/null 2>&1
+  brief="$home/data/brief-fixture-rule/brief.md"
+  assert_present "$brief" "a scaffold with a valid fixture rule must write the brief"
+  assert_contains "$(cat "$brief")" "8. Fixture rule line one for the brief.
+   - Fixture continuation line two.
+   Run \`$fake/bin/fm-text-check.sh --staged\` before each commit and act on what it lists." \
+    "the brief must render the fixture rule block as rule 8"
+  assert_no_grep "Prose above the block" "$brief" "prose outside the markers must not reach the brief"
+  assert_no_grep "Everything you write into the repo" "$brief" \
+    "the brief must take rule 8 from the owner file, not from a copy inside fm-brief.sh"
+  pass "fm-brief.sh: rule 8 is read from the owner file, and a missing rule aborts cleanly"
 }
 
 # Task branches are named with the bare task slug; the fm/ namespace is gone
@@ -397,6 +513,7 @@ test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_pr_modes_require_rule8_description
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
@@ -405,6 +522,7 @@ test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
-test_ship_and_scout_carry_outward_language_rule
+test_ship_and_scout_inline_repo_text_rule
+test_repo_text_rule_is_read_from_owner_file
 test_ship_briefs_use_bare_slug_branch
 test_scout_and_secondmate_scaffold
