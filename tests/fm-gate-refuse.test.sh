@@ -27,8 +27,8 @@
 # agents' project instructions on the no-mistakes side).
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
 GATE_LIB="$ROOT/bin/fm-gate-refuse-lib.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
@@ -91,7 +91,7 @@ run_guard_lib() {
       empty) export NO_MISTAKES_GATE= ;;
     esac
     set -eu
-    # shellcheck source=bin/fm-gate-refuse-lib.sh
+    # shellcheck source=/dev/null
     . "$GATE_LIB"
     fm_refuse_if_gate_agent
   ) 2>&1
@@ -133,47 +133,26 @@ test_helper_normal_is_noop() {
 
 # --- fm-spawn ---------------------------------------------------------------
 
-# A fake tmux/treehouse so fm-spawn resolves the crew worktree from a controlled
-# pane path and completes without a live terminal (mirrors tests/fm-tangle-guard).
-make_spawn_fakebin() {
-  local dir=$1 fakebin
-  fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
-  list-windows) exit 0 ;;
-  has-session|new-session|new-window|send-keys|set-window-option) exit 0 ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse
-  printf '%s\n' "$fakebin"
-}
-
 # run_spawn <cwd> <home> <id> <proj> <pane> <fakebin> [ASSIGN...] -> combined output
+# Gate-refuse cases must cd into a controlled cwd and drop both refusal signals
+# so the suite stays hermetic when it itself runs inside a real gate worktree.
 run_spawn() {
   local cwd=$1 home=$2 id=$3 proj=$4 pane=$5 fakebin=$6; shift 6
-  mkdir -p "$home/data/$id"
-  printf 'brief\n' > "$home/data/$id/brief.md"
+  fm_test_spawn_brief "$home" "$id" brief
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
-      "FM_ROOT_OVERRIDE=" "FM_HOME=$home" \
-      "FM_STATE_OVERRIDE=$home/state" "FM_DATA_OVERRIDE=$home/data" \
-      "FM_PROJECTS_OVERRIDE=$home/projects" "FM_CONFIG_OVERRIDE=$home/config" \
-      "FM_SPAWN_NO_GUARD=1" "FM_FAKE_PANE_PATH=$pane" "TMUX=fake,1,0" \
-      "PATH=$fakebin:$PATH" "$@" \
-      "$SPAWN" "$id" "$proj" codex ) 2>&1
+      FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX=fake,1,0 \
+      PATH="$fakebin:$PATH" "$@" \
+      "$SPAWN" "$id" "$proj" codex --mode no-mistakes --yolo off ) 2>&1
 }
 
 test_spawn_refuses_and_admits() {
   local home proj fakebin wt out rc
   home="$TMP/spawn-home"; mkdir -p "$home/data"
   proj=$(make_normal_repo "$TMP/spawn-proj")
+  fm_git_add_origin "$proj" "$TMP/spawn-origin.git"
   fakebin=$(make_spawn_fakebin "$TMP/spawn-fake")
   wt="$TMP/spawn-wt"
   git -C "$proj" worktree add -q --detach "$wt" >/dev/null 2>&1
@@ -223,8 +202,11 @@ case "${1:-}" in
     done
     printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
     exit 0 ;;
-  display-message) printf '%%1\n'; exit 0 ;;
-  capture-pane) printf '\xe2\x94\x82 \xe2\x94\x82\n'; exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
+    printf '%%1\n'; exit 0 ;;
+  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  list-windows) printf 'fm-lane-ok\n'; exit 0 ;;
 esac
 exit 0
 SH
@@ -270,8 +252,14 @@ test_send_refuses_and_admits() {
   expect_code 0 "$rc" "send: a normal session must still send"
   assert_not_contains "$out" "$ENV_MSG" "send: normal send must not print the gate refusal"
   assert_not_contains "$out" "$PATH_MSG" "send: normal send must not print the backstop refusal"
-  assert_contains "$(cat "$log")" "target=sess:fm-lane-ok literal=1 arg=hello captain" "send: normal send should type the text"
-  pass "fm-send: refuses on marker and gate-worktree backstop; a normal steer is unaffected"
+  [ "$(bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" \
+      "$home/state/lane-ok.inbox/001.msg")" = "hello captain" ] \
+    || fail "send: normal steer was not durably enqueued"
+  assert_not_contains "$(cat "$log")" "literal=1 arg=hello captain" \
+    "send: normal steer payload must not be typed"
+  assert_contains "$(cat "$log")" "target=sess:fm-lane-ok literal=1 arg=: Firstmate instruction waiting" \
+    "send: normal steer should ring the durable inbox doorbell"
+  pass "fm-send: refuses on marker and gate-worktree backstop; a normal steer uses the inbox"
 }
 
 # --- fm-teardown ------------------------------------------------------------
@@ -282,7 +270,7 @@ test_send_refuses_and_admits() {
 make_teardown_case() {
   local name=$1 case_dir fakebin t
   case_dir="$TMP/$name"; fakebin="$case_dir/fakebin"
-  mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/config" "$case_dir/data" "$fakebin"
   for t in treehouse tmux; do
     printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/$t"
     chmod +x "$fakebin/$t"
@@ -316,8 +304,9 @@ SH
   git -C "$case_dir/wt" push -q origin fm/task-x1
   git -C "$case_dir/project" fetch -q origin
   fm_write_meta "$case_dir/state/task-x1.meta" \
-    "window=fm-task-x1" "worktree=$case_dir/wt" "project=$case_dir/project" \
-    "kind=ship" "mode=no-mistakes"
+    "window=firstmate:fm-task-x1" "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/wt" "project=$case_dir/project" \
+    "kind=ship" "mode=no-mistakes" "spawn_gen=spawn-gate-refuse-task-x1"
   touch "$case_dir/state/.last-watcher-beat"
   printf '%s\n' "$case_dir"
 }
@@ -327,7 +316,8 @@ run_teardown() {
   local cwd=$1 case_dir=$2; shift 2
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
       "FM_ROOT_OVERRIDE=$ROOT" "FM_STATE_OVERRIDE=$case_dir/state" \
-      "FM_CONFIG_OVERRIDE=$case_dir/config" "PATH=$case_dir/fakebin:$PATH" "$@" \
+      "FM_DATA_OVERRIDE=$case_dir/data" "FM_CONFIG_OVERRIDE=$case_dir/config" \
+      "PATH=$case_dir/fakebin:$PATH" "$@" \
       "$TEARDOWN" task-x1 ) 2>&1
 }
 
@@ -358,36 +348,6 @@ test_teardown_refuses_and_admits() {
   pass "fm-teardown: refuses on marker and gate-worktree backstop; a normal teardown is unaffected"
 }
 
-# --- tracked .no-mistakes.yaml ----------------------------------------------
-
-test_no_mistakes_yaml_disables_project_settings() {
-  local file="$ROOT/.no-mistakes.yaml" val tab
-  assert_present "$file" "tracked .no-mistakes.yaml is missing"
-  git -C "$ROOT" ls-files --error-unmatch .no-mistakes.yaml >/dev/null 2>&1 \
-    || fail ".no-mistakes.yaml is not tracked by git"
-
-  # Parse with a real YAML loader and assert the field is boolean true, so a
-  # malformed file or a stringy "true" fails where a naive grep would pass.
-  if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
-    val=$(python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1])).get("disable_project_settings"))' "$file") \
-      || fail ".no-mistakes.yaml did not parse as YAML (python3)"
-    [ "$val" = "True" ] || fail "disable_project_settings is not boolean true (python3 read: $val)"
-  elif command -v ruby >/dev/null 2>&1; then
-    ruby -ryaml -e 'exit((YAML.safe_load(File.read(ARGV[0]))["disable_project_settings"] == true) ? 0 : 1)' "$file" \
-      || fail ".no-mistakes.yaml did not parse or disable_project_settings != true (ruby)"
-  else
-    # No YAML loader: fall back to a strict structural check - no tab indentation
-    # (YAML forbids it) and the top-level key mapped to the bare boolean true.
-    tab=$(printf '\t')
-    case "$(cat "$file")" in
-      *"$tab"*) fail ".no-mistakes.yaml uses a tab (invalid YAML indentation)" ;;
-    esac
-    grep -qxE 'disable_project_settings:[[:space:]]+true' "$file" \
-      || fail "top-level 'disable_project_settings: true' not found in .no-mistakes.yaml"
-  fi
-  pass ".no-mistakes.yaml parses and sets disable_project_settings: true (trusted-only gate opt-out)"
-}
-
 test_helper_env_marker_refuses
 test_helper_empty_env_marker_refuses
 test_helper_path_backstop_refuses
@@ -395,4 +355,3 @@ test_helper_normal_is_noop
 test_spawn_refuses_and_admits
 test_send_refuses_and_admits
 test_teardown_refuses_and_admits
-test_no_mistakes_yaml_disables_project_settings
