@@ -510,6 +510,118 @@ resolution_block() {  # <mode>
     "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
 }
 
+# --- Done-archive lookup (docs/captain-hold-lifecycle.md owns the contract) ---
+# Results go through globals: a fail inside a command substitution would read
+# as an empty result, which callers would take for a legitimate absence.
+
+ARCHIVE_PATH=
+# A malformed archive setting refuses rather than reading as no archive.
+load_archive_path() {
+  local data root backend config value
+  ARCHIVE_PATH=
+  data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
+  root=$(fm_backlog_root "$data") || fail "$FM_BACKLOG_TRANSITION_ERROR"
+  backend=$(fm_tasks_axi_backend "$root" 2>/dev/null) || return 0
+  [ "$backend" = markdown ] || return 0
+  config="$root/.tasks.toml"
+  [ -f "$config" ] || return 0
+  value=$(awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*\[/ {
+      section = $0
+      sub(/^[[:space:]]*\[[[:space:]]*/, "", section)
+      sub(/[[:space:]]*\].*$/, "", section)
+      in_markdown = (section == "markdown")
+      next
+    }
+    in_markdown && /^[[:space:]]*archive[[:space:]]*=/ {
+      value = $0
+      sub(/^[[:space:]]*archive[[:space:]]*=[[:space:]]*/, "", value)
+      if (match(value, /^["\047][^"\047]*["\047]/)) {
+        printf "value\t%s\n", substr(value, RSTART + 1, RLENGTH - 2)
+      } else {
+        print "malformed"
+      }
+      exit
+    }
+  ' "$config" 2>/dev/null) || fail "could not read the backlog archive setting in $config"
+  case "$value" in
+    '') return 0 ;;
+    "value	"*)
+      value=${value#value	}
+      [ -n "$value" ] || fail "the backlog archive setting in $config is empty"
+      case "$value" in
+        /*) ARCHIVE_PATH=$value ;;
+        *) ARCHIVE_PATH="$root/$value" ;;
+      esac
+      ;;
+    *) fail "the backlog archive setting in $config is not a quoted path" ;;
+  esac
+}
+
+ARCHIVE_FOUND=0
+ARCHIVE_RESOLVED=0
+# Retention can archive one id more than once and `tasks-axi show` returns
+# only the first match, so each archived row is staged alone under `## Done`
+# and read back through tasks-axi, which stays the only parser of a row.
+load_archive_show() {  # <id>
+  local id=$1 archive snapdir snapshot show root rc secs=${FM_BACKLOG_ROW_TIMEOUT_SECS:-10}
+  ARCHIVE_FOUND=0
+  ARCHIVE_RESOLVED=0
+  load_archive_path
+  archive=$ARCHIVE_PATH
+  [ -n "$archive" ] && [ -e "$archive" ] || return 0
+  [ -f "$archive" ] || fail "the backlog archive is not a regular file: $archive"
+  [ -r "$archive" ] || fail "the backlog archive is not readable: $archive"
+  [ -s "$archive" ] || return 0
+  [ "$(LC_ALL=C tr -d -c '\000' < "$archive" | wc -c | tr -d ' ')" = 0 ] \
+    || fail "the backlog archive is not a text backlog file: $archive"
+  grep -q '^##[[:space:]]' "$archive" \
+    || fail "the backlog archive has no recognizable backlog sections: $archive"
+  case "$secs" in ''|*[!0-9]*) secs=10 ;; esac
+  [ "$secs" -gt 0 ] 2>/dev/null || secs=10
+  root=${archive%/*}
+  snapdir=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-captain-hold-archive.XXXXXX") \
+    || fail "could not stage a read-only snapshot of $archive"
+  # Row bodies are indented, so an unindented `- [` line always starts a row.
+  if ! awk -v id="$id" -v dir="$snapdir" '
+    /^##[[:space:]]/ { if (out != "") { close(out); out = "" } ; next }
+    /^-[[:space:]]*\[/ {
+      if (out != "") { close(out); out = "" }
+      head = $0
+      sub(/^-[[:space:]]*\[[^\]]*\][[:space:]]*/, "", head)
+      split(head, parts, /[[:space:]]/)
+      if (parts[1] == id) {
+        n++
+        out = dir "/record-" n ".md"
+        print "## Done" > out
+        print $0 > out
+      }
+      next
+    }
+    out != "" { print > out }
+  ' "$archive"; then
+    rm -rf "$snapdir"
+    fail "could not stage a read-only snapshot of $archive"
+  fi
+  for snapshot in "$snapdir"/record-*.md; do
+    [ -f "$snapshot" ] || continue
+    rc=0
+    show=$(cd "$root" 2>/dev/null && fm_run_timed "$secs" tasks-axi show "$id" --file "$snapshot" --full 2>/dev/null) || rc=$?
+    if [ "$rc" -eq 124 ]; then
+      rm -rf "$snapdir"
+      fail "the backlog backend exceeded its read bound reading archived $id"
+    fi
+    [ "$rc" -eq 0 ] || continue
+    ARCHIVE_FOUND=1
+    if [ "$(show_field "$show" state)" = "done" ] && body_has_resolution_record "$(show_field "$show" body)"; then
+      ARCHIVE_RESOLVED=1
+      break
+    fi
+  done
+  rm -rf "$snapdir"
+}
+
 # Durable state of one captain call: an active captain hold (annotations
 # surviving even when a date gate has expired) or a recorded captain answer.
 verify_hold_durable() {  # <task-id>
@@ -524,6 +636,12 @@ verify_hold_durable() {  # <task-id>
   fi
   if [ "$state" != "done" ] && [ "$hold_kind" = captain ]; then
     return 0
+  fi
+  # A closed live row without its resolution may be a later copy of an id whose
+  # answered row retention already archived.
+  if [ "$state" = "done" ]; then
+    load_archive_show "$id"
+    [ "$ARCHIVE_RESOLVED" = 0 ] || return 0
   fi
   fail "captain-held task $id is neither held for the captain nor closed with a recorded captain answer"
 }
@@ -799,8 +917,31 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
 # as absence. On success prints "<id> <how>" so the caller can keep the
 # attestation evidence.
 verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
-  local origin=$1 entry=$2 resolved resolve_status=0
-  resolved=$(resolve_entry "$origin" "$entry") || resolve_status=$?
+  local origin=$1 entry=$2 resolved resolve_status=0 errfile candidate candidates
+  errfile=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-resolve.XXXXXX") \
+    || fail "cannot stage the resolution diagnostics for $entry"
+  resolved=$(resolve_entry "$origin" "$entry" 2>"$errfile") || resolve_status=$?
+  # Status 1 means no live row carries the entry; retention may have archived it.
+  if [ "$resolve_status" -eq 1 ]; then
+    candidates=$entry
+    if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
+      candidates="$candidates $(legacy_hold_id "$origin" "$entry")"
+    fi
+    for candidate in $candidates; do
+      load_archive_show "$candidate"
+      if [ "$ARCHIVE_RESOLVED" = 1 ]; then
+        rm -f -- "$errfile"
+        printf '%s archived\n' "$candidate"
+        return 0
+      fi
+      if [ "$ARCHIVE_FOUND" = 1 ]; then
+        rm -f -- "$errfile"
+        fail "archived captain call $candidate has no recorded captain answer"
+      fi
+    done
+  fi
+  cat -- "$errfile" >&2
+  rm -f -- "$errfile"
   if [ "$resolve_status" -ne 0 ]; then
     [ "$resolve_status" -ne 124 ] \
       || fail "the backlog backend exceeded its read bound resolving $entry"

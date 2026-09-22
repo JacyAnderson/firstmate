@@ -866,6 +866,70 @@ test_answer_records_and_closes() {
   pass "answer records the captain's words, closes idempotently, and releases routed work"
 }
 
+# Answered calls that retention moved into the Done archive still satisfy the
+# completion gate; an unanswered archived row or a missing archive key refuses.
+test_answered_calls_in_the_done_archive_still_verify() {
+  local home id k archive
+  home=$(make_home archive-rotation)
+  perl -0pi -e 's/done_keep = 10/done_keep = 1/' "$home/.tasks.toml"
+  id=sample-archive-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Review archived calls" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the archive-rotation origin"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Archive review\n\nThree captain choices were answered.\n' > "$home/data/$id/report.md"
+  for k in a b c; do
+    run_captain "$home" hold "sample-archive-$k" --title "Choose archive option $k" \
+      --reason "captain archive choice $k pending" --repo sample >/dev/null \
+      || fail "could not hold archive call $k"
+  done
+  run_captain "$home" complete "$id" sample-archive-a sample-archive-b sample-archive-c >/dev/null \
+    || fail "completion failed for the live held inventory"
+  for k in a b c; do
+    printf 'Captain chose archive option %s.\n' "$k" > "$home/answer-$k.txt"
+    run_captain "$home" answer "sample-archive-$k" --decision-file "$home/answer-$k.txt" >/dev/null \
+      || fail "could not answer archive call $k"
+  done
+  archive="$home/data/done-archive.md"
+  grep -q '^- \[x\] sample-archive-a ' "$archive" || fail "retention did not archive the first answered call"
+  if tasks_in "$home" show sample-archive-a >/dev/null 2>&1; then
+    fail "the fixture did not rotate the answered call out of the live backlog"
+  fi
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "verify refused answered calls that retention archived: $(cat "$home/verify.err")"
+  [ ! -s "$home/verify.err" ] || fail "an archived resolution still reported the live absence: $(cat "$home/verify.err")"
+  run_captain "$home" complete "$id" sample-archive-a >/dev/null \
+    || fail "complete refused an answered call that retention archived"
+
+  cp "$archive" "$home/archive.orig"
+  { printf '## Archived 2026-01-01\n- [x] sample-archive-a - Choose archive option a (repo: sample) (kind: captain) (done 2026-01-01)\n\n'
+    cat "$home/archive.orig"; } > "$archive"
+  run_captain "$home" verify "$id" >/dev/null 2> "$home/dup.err" \
+    || fail "an unanswered earlier copy hid the answered archived row: $(cat "$home/dup.err")"
+
+  awk '/^- \[/ { skip = ($3 == "sample-archive-a") } skip && /^  / { next } { print }' \
+    "$home/archive.orig" > "$archive"
+  if run_captain "$home" verify "$id" >/dev/null 2> "$home/unanswered.err"; then
+    fail "an archived call with no recorded answer satisfied the gate"
+  fi
+  assert_contains "$(cat "$home/unanswered.err")" "has no recorded captain answer" \
+    "the unanswered archived call was not named as unanswered"
+
+  cp "$home/archive.orig" "$archive"
+  perl -0pi -e 's/\narchive = "data\/done-archive.md"//' "$home/.tasks.toml"
+  if run_captain "$home" verify "$id" >/dev/null 2>&1; then
+    fail "verify consulted an archive the home no longer configures"
+  fi
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  perl -0pi -e 's/done_keep = 10/done_keep = 1/' "$home/.tasks.toml"
+
+  run_teardown "$home" "$id" >/dev/null 2> "$home/teardown.err" \
+    || fail "cleanup refused an investigation whose answered calls were archived: $(cat "$home/teardown.err")"
+  pass "answered captain calls rotated into the Done archive still satisfy the completion gate"
+}
+
 # --release lifts the hold instead of closing, preserving the work item's own
 # body under the record; a re-held task later accepts a new answer.
 test_release_frees_held_work() {
@@ -4032,6 +4096,7 @@ test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
+test_answered_calls_in_the_done_archive_still_verify
 test_release_frees_held_work
 test_hold_stamp_precedes_hold_visibility
 test_interrupted_answer_preserves_hold_age
