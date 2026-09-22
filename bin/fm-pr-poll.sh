@@ -15,7 +15,8 @@
 # cannot answer. Its last-seen watermark lives in a private mutable
 # state/<id>.pr-comments file whose path the watcher passes as the optional
 # seventh --validated argument (derived from $0 in sidecar mode). The file
-# holds a version line and one provider-tagged record:
+# holds a version line, the PR URL it belongs to, and one provider-tagged
+# record:
 #   github <token-login-or--> <issue-comment-watermark> <review-comment-watermark>
 #   gitlab <user-note-count>
 # GitHub watermarks are created_at timestamps over the issue-comment and
@@ -25,6 +26,9 @@
 # note authors are not cheaply distinguishable there, so any increase wakes
 # and the supervisor triages. A missing or unreadable watermark record is
 # re-initialized silently, so first arm and re-arm never produce a false wake.
+# So is a record for another PR, which a poll of the old PR still running
+# across a re-arm can write after bin/fm-pr-check.sh removed the file. A v1
+# record predates the URL line and is still read.
 # Watermark values are validated on read and write and are only ever compared
 # as strings or integers; no forge-provided content is ever executed.
 set -u
@@ -121,20 +125,25 @@ WM_F1=
 WM_F2=
 WM_F3=
 wm_read() {
-  local version record rest
+  local version owner record rest
   WM_F1=
   WM_F2=
   WM_F3=
   [ -f "$comments_file" ] && [ ! -L "$comments_file" ] || return 1
   { exec 4< "$comments_file"; } 2>/dev/null || return 1
   IFS= read -r version <&4 || { exec 4<&-; return 1; }
+  case "$version" in
+    fm-pr-comments-v1) owner=$url ;;
+    fm-pr-comments-v2) IFS= read -r owner <&4 || { exec 4<&-; return 1; } ;;
+    *) exec 4<&-; return 1 ;;
+  esac
   IFS= read -r record <&4 || { exec 4<&-; return 1; }
   if IFS= read -r _extra <&4; then
     exec 4<&-
     return 1
   fi
   exec 4<&-
-  [ "$version" = fm-pr-comments-v1 ] || return 1
+  [ "$owner" = "$url" ] || return 1
   rest=
   IFS=' ' read -r record WM_F1 WM_F2 WM_F3 rest <<EOF
 $record
@@ -147,7 +156,7 @@ EOF
 wm_write() {
   local record=$1 tmp
   tmp=$(mktemp "$comments_file.XXXXXX" 2>/dev/null) || return 1
-  if ! printf '%s\n%s\n' fm-pr-comments-v1 "$record" > "$tmp" 2>/dev/null \
+  if ! printf '%s\n%s\n%s\n' fm-pr-comments-v2 "$url" "$record" > "$tmp" 2>/dev/null \
     || ! chmod 0600 "$tmp" 2>/dev/null \
     || ! mv -f -- "$tmp" "$comments_file" 2>/dev/null; then
     rm -f -- "$tmp" 2>/dev/null

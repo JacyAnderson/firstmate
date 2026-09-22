@@ -867,7 +867,9 @@ test_answer_records_and_closes() {
 }
 
 # Answered calls that retention moved into the Done archive still satisfy the
-# completion gate; an unanswered archived row or a missing archive key refuses.
+# completion gate when their newest archived copy is answered; a newer
+# unanswered copy, a live row closed without an answer, an unanswered archived
+# row, or a missing archive key refuses.
 test_answered_calls_in_the_done_archive_still_verify() {
   local home id k archive
   home=$(make_home archive-rotation)
@@ -908,6 +910,24 @@ test_answered_calls_in_the_done_archive_still_verify() {
     cat "$home/archive.orig"; } > "$archive"
   run_captain "$home" verify "$id" >/dev/null 2> "$home/dup.err" \
     || fail "an unanswered earlier copy hid the answered archived row: $(cat "$home/dup.err")"
+
+  { cat "$home/archive.orig"
+    printf '\n## Archived 2026-01-02\n- [x] sample-archive-a - Choose archive option a (repo: sample) (kind: captain) (done 2026-01-02)\n'; } > "$archive"
+  if run_captain "$home" verify "$id" >/dev/null 2> "$home/reused.err"; then
+    fail "an older answered copy satisfied the gate for a newer unanswered copy of the id"
+  fi
+  assert_contains "$(cat "$home/reused.err")" "has no recorded captain answer" \
+    "the newer unanswered archived copy was not named as unanswered"
+
+  cp "$home/archive.orig" "$archive"
+  cp "$home/data/backlog.md" "$home/backlog.orig"
+  perl -0pi -e 's/## Done\n/## Done\n- [x] sample-archive-a - Choose archive option a (repo: sample) (kind: captain) (done 2026-01-02)\n/' \
+    "$home/data/backlog.md"
+  tasks_in "$home" show sample-archive-a >/dev/null 2>&1 || fail "the fixture did not add a live closed copy of the call"
+  if run_captain "$home" verify "$id" >/dev/null 2>&1; then
+    fail "an archived answer satisfied the gate for a live row closed without one"
+  fi
+  cp "$home/backlog.orig" "$home/data/backlog.md"
 
   awk '/^- \[/ { skip = ($3 == "sample-archive-a") } skip && /^  / { next } { print }' \
     "$home/archive.orig" > "$archive"

@@ -562,10 +562,11 @@ load_archive_path() {
 ARCHIVE_FOUND=0
 ARCHIVE_RESOLVED=0
 # Retention can archive one id more than once and `tasks-axi show` returns
-# only the first match, so each archived row is staged alone under `## Done`
-# and read back through tasks-axi, which stays the only parser of a row.
+# only the first match, so the newest archived copy (the last in the file) is
+# staged alone under `## Done` and read back through tasks-axi, which stays the
+# only parser of a row. Older copies never decide the call.
 load_archive_show() {  # <id>
-  local id=$1 archive snapdir snapshot show root rc secs=${FM_BACKLOG_ROW_TIMEOUT_SECS:-10}
+  local id=$1 archive snapdir snapshot show root rc count secs=${FM_BACKLOG_ROW_TIMEOUT_SECS:-10}
   ARCHIVE_FOUND=0
   ARCHIVE_RESOLVED=0
   load_archive_path
@@ -584,7 +585,7 @@ load_archive_show() {  # <id>
   snapdir=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-captain-hold-archive.XXXXXX") \
     || fail "could not stage a read-only snapshot of $archive"
   # Row bodies are indented, so an unindented `- [` line always starts a row.
-  if ! awk -v id="$id" -v dir="$snapdir" '
+  if ! count=$(awk -v id="$id" -v dir="$snapdir" '
     /^##[[:space:]]/ { if (out != "") { close(out); out = "" } ; next }
     /^-[[:space:]]*\[/ {
       if (out != "") { close(out); out = "" }
@@ -600,26 +601,25 @@ load_archive_show() {  # <id>
       next
     }
     out != "" { print > out }
-  ' "$archive"; then
+    END { print n + 0 }
+  ' "$archive"); then
     rm -rf "$snapdir"
     fail "could not stage a read-only snapshot of $archive"
   fi
-  for snapshot in "$snapdir"/record-*.md; do
-    [ -f "$snapshot" ] || continue
-    rc=0
-    show=$(cd "$root" 2>/dev/null && fm_run_timed "$secs" tasks-axi show "$id" --file "$snapshot" --full 2>/dev/null) || rc=$?
-    if [ "$rc" -eq 124 ]; then
-      rm -rf "$snapdir"
-      fail "the backlog backend exceeded its read bound reading archived $id"
-    fi
-    [ "$rc" -eq 0 ] || continue
-    ARCHIVE_FOUND=1
-    if [ "$(show_field "$show" state)" = "done" ] && body_has_resolution_record "$(show_field "$show" body)"; then
-      ARCHIVE_RESOLVED=1
-      break
-    fi
-  done
+  if [ "$count" -eq 0 ]; then
+    rm -rf "$snapdir"
+    return 0
+  fi
+  ARCHIVE_FOUND=1
+  snapshot="$snapdir/record-$count.md"
+  rc=0
+  show=$(cd "$root" 2>/dev/null && fm_run_timed "$secs" tasks-axi show "$id" --file "$snapshot" --full 2>/dev/null) || rc=$?
   rm -rf "$snapdir"
+  [ "$rc" -ne 124 ] || fail "the backlog backend exceeded its read bound reading archived $id"
+  if [ "$rc" -eq 0 ] && [ "$(show_field "$show" state)" = "done" ] \
+    && body_has_resolution_record "$(show_field "$show" body)"; then
+    ARCHIVE_RESOLVED=1
+  fi
 }
 
 # Durable state of one captain call: an active captain hold (annotations
@@ -636,12 +636,6 @@ verify_hold_durable() {  # <task-id>
   fi
   if [ "$state" != "done" ] && [ "$hold_kind" = captain ]; then
     return 0
-  fi
-  # A closed live row without its resolution may be a later copy of an id whose
-  # answered row retention already archived.
-  if [ "$state" = "done" ]; then
-    load_archive_show "$id"
-    [ "$ARCHIVE_RESOLVED" = 0 ] || return 0
   fi
   fail "captain-held task $id is neither held for the captain nor closed with a recorded captain answer"
 }
@@ -917,10 +911,12 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
 # as absence. On success prints "<id> <how>" so the caller can keep the
 # attestation evidence.
 verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
-  local origin=$1 entry=$2 resolved resolve_status=0 errfile candidate candidates
+  local origin=$1 entry=$2 resolved resolve_status=0 errfile errtext candidate candidates
   errfile=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-resolve.XXXXXX") \
     || fail "cannot stage the resolution diagnostics for $entry"
   resolved=$(resolve_entry "$origin" "$entry" 2>"$errfile") || resolve_status=$?
+  errtext=$(cat -- "$errfile" 2>/dev/null || true)
+  rm -f -- "$errfile"
   # Status 1 means no live row carries the entry; retention may have archived it.
   if [ "$resolve_status" -eq 1 ]; then
     candidates=$entry
@@ -930,18 +926,14 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
     for candidate in $candidates; do
       load_archive_show "$candidate"
       if [ "$ARCHIVE_RESOLVED" = 1 ]; then
-        rm -f -- "$errfile"
         printf '%s archived\n' "$candidate"
         return 0
       fi
-      if [ "$ARCHIVE_FOUND" = 1 ]; then
-        rm -f -- "$errfile"
-        fail "archived captain call $candidate has no recorded captain answer"
-      fi
+      [ "$ARCHIVE_FOUND" = 0 ] \
+        || fail "the newest archived copy of captain call $candidate has no recorded captain answer"
     done
   fi
-  cat -- "$errfile" >&2
-  rm -f -- "$errfile"
+  [ -z "$errtext" ] || printf '%s\n' "$errtext" >&2
   if [ "$resolve_status" -ne 0 ]; then
     [ "$resolve_status" -ne 124 ] \
       || fail "the backlog backend exceeded its read bound resolving $entry"

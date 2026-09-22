@@ -853,7 +853,7 @@ test_comment_watch_github() {
   [ -z "$out" ] || fail "first poll after arming woke on pre-existing comments"
   [ -f "$state/task-a.pr-comments" ] || fail "first poll did not initialize the comment watermark"
   [ "$(file_mode "$state/task-a.pr-comments")" = 600 ] || fail "comment watermark is not private"
-  wm=$(printf 'fm-pr-comments-v1\ngithub fm-bot 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z')
+  wm=$(printf 'fm-pr-comments-v2\nhttps://github.com/o/r/pull/1\ngithub fm-bot 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z')
   [ "$(cat "$state/task-a.pr-comments")" = "$wm" ] \
     || fail "comment watermark record is not the initialized anchor"
 
@@ -896,9 +896,22 @@ test_comment_watch_github() {
   out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_USER=fm-bot \
     FM_TEST_GH_UPDATED_AT=2026-03-01T00:00:00Z run_poll "$dir")
   [ -z "$out" ] || fail "a corrupted watermark produced output"
-  wm=$(printf 'fm-pr-comments-v1\ngithub fm-bot 2026-03-01T00:00:00Z 2026-03-01T00:00:00Z')
+  wm=$(printf 'fm-pr-comments-v2\nhttps://github.com/o/r/pull/1\ngithub fm-bot 2026-03-01T00:00:00Z 2026-03-01T00:00:00Z')
   [ "$(cat "$state/task-a.pr-comments")" = "$wm" ] \
     || fail "a corrupted watermark was not re-initialized"
+
+  # A record left for another PR by a poll still running across a re-arm is
+  # re-initialized silently, never trusted.
+  printf 'fm-pr-comments-v2\nhttps://github.com/o/r/pull/9\ngithub fm-bot 2026-01-01T00:00:00Z 2026-01-01T00:00:00Z\n' \
+    > "$state/task-a.pr-comments"
+  chmod 0600 "$state/task-a.pr-comments"
+  out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_USER=fm-bot \
+    FM_TEST_GH_ISSUE_COMMENTS=$'2026-03-02T00:00:00Z\tcoderabbitai[bot]' \
+    FM_TEST_GH_UPDATED_AT=2026-03-03T00:00:00Z run_poll "$dir")
+  [ -z "$out" ] || fail "a watermark for another PR woke this PR's poll: $out"
+  wm=$(printf 'fm-pr-comments-v2\nhttps://github.com/o/r/pull/1\ngithub fm-bot 2026-03-03T00:00:00Z 2026-03-03T00:00:00Z')
+  [ "$(cat "$state/task-a.pr-comments")" = "$wm" ] \
+    || fail "a watermark for another PR was not re-initialized"
 
   # With no forge anchor available there is no watermark and no wake.
   rm -f "$state/task-a.pr-comments"
@@ -929,7 +942,7 @@ test_comment_watch_gitlab() {
   # First arm stores the current user-note count silently.
   out=$(FM_TEST_GLAB_COMMENTS=2 run_poll "$dir")
   [ -z "$out" ] || fail "first GitLab poll woke on pre-existing notes"
-  [ "$(cat "$state/task-a.pr-comments")" = "$(printf 'fm-pr-comments-v1\ngitlab 2')" ] \
+  [ "$(cat "$state/task-a.pr-comments")" = "$(printf 'fm-pr-comments-v2\n%s\ngitlab 2' "$url")" ] \
     || fail "GitLab watermark record is not the initial note count"
 
   # Note authors are not cheaply distinguishable through plain glab, so any
@@ -952,7 +965,7 @@ test_comment_watch_gitlab() {
   [ -z "$out" ] || fail "GitLab poll emitted while glab was failing"
   out=$(run_poll "$dir")
   [ -z "$out" ] || fail "a missing comments field produced output"
-  [ "$(cat "$state/task-a.pr-comments")" = "$(printf 'fm-pr-comments-v1\ngitlab 5')" ] \
+  [ "$(cat "$state/task-a.pr-comments")" = "$(printf 'fm-pr-comments-v2\n%s\ngitlab 5' "$url")" ] \
     || fail "a missing comments field changed the watermark"
   out=$(FM_TEST_GLAB_STATE=merged FM_TEST_GLAB_COMMENTS=9 run_poll "$dir")
   [ "$out" = merged ] || fail "GitLab merge detection changed with comment detection active"
