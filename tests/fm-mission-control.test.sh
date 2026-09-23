@@ -142,7 +142,7 @@ out=$(cat "$HOME_DIR/start.out")
 assert_contains "$out" "registered: state/mission-control.check.sh" "start registers the inbox check"
 assert_present "$STATE/mission-control.check.sh" "check shim installed"
 assert_present "$STATE/mission-control.check-trust" "check trust binding written"
-mode=$(stat -f %Lp "$STATE/mission-control.check.sh" 2>/dev/null || stat -c %a "$STATE/mission-control.check.sh")
+mode=$(stat -c %a "$STATE/mission-control.check.sh" 2>/dev/null || stat -f %Lp "$STATE/mission-control.check.sh")
 [ "$mode" = 700 ] || fail "check shim mode is $mode, expected 700"
 pass "check shim is mode 0700 and registered"
 

@@ -1070,15 +1070,15 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
       "$mode: the replacement launch left the stale scout prohibition readable at face value"
     case "$mode" in
       direct-PR)
-        rule="1. Never push to the default branch (push only your \`fm/$id\` branch). Never merge a PR." ;;
+        rule="1. Never push to the default branch (push only your \`$id\` branch). Never merge a PR." ;;
       local-only)
-        rule="1. Never push to any remote and never open a PR. Work only on your \`fm/$id\` branch; firstmate handles the merge into local \`main\`." ;;
+        rule="1. Never push to any remote and never open a PR. Work only on your \`$id\` branch; firstmate handles the merge into local \`main\`." ;;
       *)
         rule='1. Never push to the default branch. Never merge a PR.' ;;
     esac
     assert_grep "$rule" "$launch" \
       "$mode: the replacement launch did not receive the current ship push and merge safety rule"
-    assert_grep "git checkout -b fm/$id" "$launch" \
+    assert_grep "git checkout -b $id" "$launch" \
       "$mode: the replacement launch did not receive its promoted branch name"
     assert_grep 'Inventory this worktree' "$launch" \
       "$mode: the replacement launch did not receive the scratch-state inventory step"
