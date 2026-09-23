@@ -9,24 +9,39 @@
 # HEAD-continuity guard; see docs/architecture.md "No-mistakes gate authority boundary."
 disable_project_settings: true
 
-# Pin lint to the same deterministic command CI runs, instead of leaving it to
-# no-mistakes' default handling. Without a configured commands.lint, the gate's
-# lint step never ran the deterministic
-# `shellcheck bin/*.sh bin/backends/*.sh tests/*.sh` that CI runs, so info-level
-# ShellCheck findings (e.g. SC2015) were not surfaced locally before CI rejected
-# them. commands.lint delegates to bin/fm-lint.sh, the single owner of the lint
-# definition that .github/workflows/ci.yml also invokes, so local can never
-# diverge from CI again (parity asserted by tests/fm-lint.test.sh).
+# Trusted documentation placement policy for the Document step.
+# The audience inventory and coding guideline own the detail; keep this as a
+# pointer so gate instructions cannot become a second prose policy.
+document:
+  instructions: |
+    Read docs/documentation-audiences.md and its machine-consumed
+    docs/documentation-audiences.json inventory before changing documentation.
+    Apply the knowledge-placement policy in
+    .agents/skills/firstmate-coding-guidelines/SKILL.md.
+    For changed prose, verify audience, authoritative owner, current relevance,
+    evidence destination, and unique safety facts, then review the complete
+    branch diff again after every documentation or lint fix.
+
+# Pin lint to the same owner CI invokes instead of leaving it to no-mistakes'
+# default handling, which does not invoke the repository's canonical lint gate.
+# `bin/fm-lint.sh` owns the context-sensitive ShellCheck modes and GitHub
+# workflow lint via pinned actionlint in `bin/fm-lint-workflows.sh`.
+# Invocation wiring is asserted by `tests/fm-lint.test.sh` and
+# `tests/fm-lint-workflows.test.sh`.
 #
-# Do not set commands.test to a complete tests/*.test.sh walk. Local no-mistakes
-# Test is intent-targeted validation of whether the change meets its brief;
-# .github/workflows/ci.yml owns broad regression (behavior suite, platform,
-# security, Herdr, tmux, and lifecycle coverage). A full-suite override here
-# would duplicate CI and defeat the targeted Test contract.
+# Keep commands.test absent; the firstmate-coding-guidelines skill owns this policy.
 commands:
   lint: 'bin/fm-lint.sh'
 
-# Keep test evidence out of this repo; it stays in a temp dir instead.
+# Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
+# The evidence is not committed to the feature or default branch.
 test:
+  instructions: |
+    Run live Herdr scenarios only through bin/fm-herdr-lab.sh with a named non-default fm-lab-* session, following that helper's prepare, provision, run, and teardown contract exactly.
+    Never touch the live default Herdr session or fleet panes.
+    Prefer a throwaway lab for spawn, long-launch, and Claude-path proofs, and tear it down in the same evidence turn.
+    Do not mutate the operator primary checkout, real fleet FM_HOME state, or production credentials, and keep git changes otherwise inside the run worktree.
+    Read docs/herdr-backend.md and the bin/fm-herdr-lab.sh header as the owners of Herdr lab mechanics rather than reproducing that manual here.
+    Ship or scout briefs that will drive Herdr lifecycle still require --herdr-lab at scaffold time; these Test-agent instructions are not a substitute for that brief flag.
   evidence:
-    store_in_repo: false
+    store_in_repo: true

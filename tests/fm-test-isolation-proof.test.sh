@@ -1,27 +1,172 @@
 #!/usr/bin/env bash
-# Contract tests for bin/fm-test-isolation-proof.sh - the Phase 2 pre-shard
-# isolation proof harness.
-#
-# These tests assert the candidate-set contract, serial exclusions, aggregate
-# failure reporting, and that Phase 4 production shards consume this exact set.
-# They deliberately do NOT re-run the full concurrent candidate matrix on every
-# invocation (that matrix is owned by the harness itself and archived under
-# docs/fm-test-isolation-proof.md after a deliberate proof run).
+# Behavioral tests for the isolation-proof and test-run public interfaces.
 set -u
 
-# shellcheck disable=SC1091
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PROOF="$ROOT/bin/fm-test-isolation-proof.sh"
 RUNNER="$ROOT/bin/fm-test-run.sh"
-CI="$ROOT/.github/workflows/ci.yml"
-CONTRIB="$ROOT/CONTRIBUTING.md"
-PROOF_DOC="$ROOT/docs/fm-test-isolation-proof.md"
-PROOF_JSON="$ROOT/docs/fm-test-isolation-proof.json"
 
 assert_present "$PROOF" "bin/fm-test-isolation-proof.sh is missing"
 [ -x "$PROOF" ] || fail "bin/fm-test-isolation-proof.sh must be executable"
+
+test_unknown_pool_is_refused() {
+  local tmp rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-isolation-proof-pool.XXXXXX")
+  set +e
+  "$PROOF" --pool unknown-family --list >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "unknown --pool must be refused with exit 2, got $rc"
+  [ ! -s "$tmp/out" ] || fail "unknown --pool unexpectedly listed candidates: $(cat "$tmp/out")"
+  rm -rf "$tmp"
+  pass "unknown candidate pools are refused"
+}
+
+test_family_pool_json_identifies_admission() {
+  local tmp repo proof json admitted_json capped_json skipped_json rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-isolation-proof-json.XXXXXX")
+  repo="$tmp/repo"
+  proof="$repo/bin/fm-test-isolation-proof.sh"
+  json="$tmp/proof.json"
+  admitted_json="$tmp/admitted-proof.json"
+  capped_json="$tmp/capped-proof.json"
+  skipped_json="$tmp/skipped-proof.json"
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$PROOF" "$proof"
+  cat >"$repo/bin/fm-test-run.sh" <<'SH'
+#!/usr/bin/env bash
+if { [ "$1" = --list ] || [ "$1" = --list-scheduled ]; } && [ "$2" = --family ]; then
+  case "$3" in
+    fixture-family)
+      printf '%s\n' tests/fm-proof-fixture-a.test.sh tests/fm-proof-fixture-b.test.sh
+      exit 0
+      ;;
+    admitted-family)
+      printf '%s\n' tests/fm-proof-slow.test.sh tests/fm-proof-fast.test.sh tests/fm-proof-replacement.test.sh
+      exit 0
+      ;;
+    skipped-family)
+      printf '%s\n' tests/fm-proof-skipped.test.sh
+      exit 0
+      ;;
+  esac
+fi
+if [ "$1" = --list-concurrent-safe-families ]; then
+  printf '%s\n' admitted-family skipped-family
+  exit 0
+fi
+if [ "$1" = --concurrent-safe-family-jobs-max ]; then
+  case "$2" in
+    admitted-family|skipped-family)
+      printf '2\n'
+      exit 0
+      ;;
+  esac
+fi
+exit 2
+SH
+  for fixture in fm-proof-fixture-a.test.sh fm-proof-fixture-b.test.sh; do
+    cat >"$repo/tests/$fixture" <<'SH'
+#!/usr/bin/env bash
+echo "ok - proof fixture"
+SH
+    chmod +x "$repo/tests/$fixture"
+  done
+  cat >"$repo/tests/fm-proof-slow.test.sh" <<'SH'
+#!/usr/bin/env bash
+waited=0
+while [ ! -e "$PROOF_SCHED_EVIDENCE/replacement-started" ] && [ "$waited" -lt 200 ]; do
+  sleep 0.05
+  waited=$((waited + 1))
+done
+touch "$PROOF_SCHED_EVIDENCE/slow-done"
+echo "ok - slow proof fixture"
+SH
+  cat >"$repo/tests/fm-proof-fast.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "ok - fast proof fixture"
+SH
+  cat >"$repo/tests/fm-proof-replacement.test.sh" <<'SH'
+#!/usr/bin/env bash
+if [ -e "$PROOF_SCHED_EVIDENCE/slow-done" ]; then
+  echo "not ok - proof scheduler waited for oldest worker"
+  exit 1
+fi
+touch "$PROOF_SCHED_EVIDENCE/replacement-started"
+echo "ok - replacement proof fixture"
+SH
+  cat >"$repo/tests/fm-proof-skipped.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo
+echo "skip: herdr not found"
+SH
+  chmod +x "$proof" "$repo/bin/fm-test-run.sh" "$repo/tests/fm-proof-"*.test.sh
+  set +e
+  "$proof" --pool fixture-family --jobs 1 --json "$json" >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "family pool proof fixture failed: $(cat "$tmp/out") $(cat "$tmp/err")"
+  python3 -c '
+import json, sys
+artifact = json.load(open(sys.argv[1], encoding="utf-8"))
+assert artifact["kind"] == "isolation-proof"
+assert artifact["pool"] == "fixture-family"
+assert artifact["fm_test_run_jobs_enabled"] is False
+assert artifact["production_sharding_enabled"] is False
+assert artifact["summary"]["total"] == 2
+assert artifact["summary"]["failed"] == 0
+' "$json" || fail "serial family pool artifact metadata is incorrect"
+  set +e
+  PROOF_SCHED_EVIDENCE="$tmp" "$proof" --pool admitted-family --jobs 2 --json "$admitted_json" >"$tmp/admitted.out" 2>"$tmp/admitted.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "admitted family proof fixture failed: $(cat "$tmp/admitted.out") $(cat "$tmp/admitted.err")"
+  python3 -c '
+import json, sys
+artifact = json.load(open(sys.argv[1], encoding="utf-8"))
+assert artifact["pool"] == "admitted-family"
+assert artifact["concurrency"] == 2
+assert artifact["fm_test_run_jobs_enabled"] is True
+assert artifact["summary"]["total"] == 3
+assert artifact["summary"]["failed"] == 0
+' "$admitted_json" || fail "admitted family pool artifact metadata is incorrect"
+  mkdir "$tmp/capped-evidence"
+  set +e
+  PROOF_SCHED_EVIDENCE="$tmp/capped-evidence" "$proof" --pool admitted-family --jobs 3 --json "$capped_json" >"$tmp/capped.out" 2>"$tmp/capped.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "over-cap family proof fixture failed: $(cat "$tmp/capped.out") $(cat "$tmp/capped.err")"
+  python3 -c '
+import json, sys
+artifact = json.load(open(sys.argv[1], encoding="utf-8"))
+assert artifact["pool"] == "admitted-family"
+assert artifact["concurrency"] == 3
+assert artifact["fm_test_run_jobs_enabled"] is False
+assert artifact["summary"]["failed"] == 0
+' "$capped_json" || fail "over-cap family pool artifact metadata is incorrect"
+  set +e
+  "$proof" --pool skipped-family --jobs 2 --json "$skipped_json" >"$tmp/skipped.out" 2>"$tmp/skipped.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "gate-skipped family proof must fail, got $rc"
+  grep -Fq 'pool skipped-family candidate gate-skipped' "$tmp/skipped.err" \
+    || fail "gate-skipped proof did not name its pool: $(cat "$tmp/skipped.err")"
+  grep -Fq 'tests/fm-proof-skipped.test.sh: skip: herdr not found' "$tmp/skipped.err" \
+    || fail "gate-skipped proof did not name its candidate and prerequisite: $(cat "$tmp/skipped.err")"
+  python3 -c '
+import json, sys
+artifact = json.load(open(sys.argv[1], encoding="utf-8"))
+assert artifact["pool"] == "skipped-family"
+assert artifact["fm_test_run_jobs_enabled"] is False
+assert artifact["summary"]["total"] == 1
+assert artifact["summary"]["failed"] == 1
+assert artifact["scripts"][0]["exit"] == 1
+' "$skipped_json" || fail "gate-skipped family artifact was admitted"
+  rm -rf "$tmp"
+  pass "family pool JSON scopes jobs admission to proven concurrency"
+}
 
 test_list_candidates_nonempty_and_stable() {
   local listed count sorted
@@ -31,7 +176,6 @@ test_list_candidates_nonempty_and_stable() {
   [ "$count" -ge 10 ] || fail "expected a bounded non-trivial candidate set, got $count"
   sorted=$(printf '%s\n' "$listed" | LC_ALL=C sort)
   [ "$listed" = "$sorted" ] || fail "--list must be sorted for a stable matrix"
-  # No duplicates.
   [ "$(printf '%s\n' "$listed" | uniq | wc -l | tr -d ' ')" = "$count" ] \
     || fail "--list must not duplicate candidates"
   while IFS= read -r line; do
@@ -47,14 +191,8 @@ test_list_candidates_nonempty_and_stable() {
 test_candidates_exclude_serial_classes() {
   local listed
   listed=$("$PROOF" --list)
-  # Self must never re-enter the concurrent matrix.
-  printf '%s\n' "$listed" | grep -Fq 'tests/fm-test-isolation-proof.test.sh' \
-    && fail "isolation-proof test must not be a parallel candidate"
-  # Continuity fixture starts a background sleep holder.
-  printf '%s\n' "$listed" | grep -Fq 'tests/fm-continuity-pretool-check.test.sh' \
-    && fail "continuity pretool check must stay serial (process holder)"
-  # Real tmux smoke, watcher lock, real herdr, AFK, live harnesses stay serial.
   for banned in \
+    tests/fm-test-isolation-proof.test.sh \
     tests/fm-backend-tmux-smoke.test.sh \
     tests/fm-watcher-lock.test.sh \
     tests/fm-wake-queue.test.sh \
@@ -67,16 +205,6 @@ test_candidates_exclude_serial_classes() {
       && fail "serial-class script must not be a parallel candidate: $banned"
   done
   pass "serial classes remain excluded from the parallel candidate set"
-}
-
-test_candidates_match_archived_proof() {
-  local listed archived
-  assert_present "$PROOF_JSON" "docs/fm-test-isolation-proof.json missing"
-  listed=$("$PROOF" --list)
-  archived=$(jq -r '.scripts[].path' "$PROOF_JSON" | LC_ALL=C sort)
-  [ "$listed" = "$archived" ] \
-    || fail "candidate set must exactly match the archived isolation proof"
-  pass "candidate set exactly matches the archived isolation proof"
 }
 
 test_extra_hermetic_candidates_present() {
@@ -92,15 +220,13 @@ test_extra_hermetic_candidates_present() {
     printf '%s\n' "$listed" | grep -Fxq "$want" \
       || fail "extra hermetic candidate missing: $want"
   done
-  pass "audited fake-backend / stub-network extras are candidates"
+  pass "audited fake-backend and stub-network extras are candidates"
 }
 
 test_list_exclusions_documents_reasons() {
   local out
   out=$("$PROOF" --list-exclusions)
   [ -n "$out" ] || fail "--list-exclusions printed nothing"
-  printf '%s\n' "$out" | grep -Fq 'fm-continuity-pretool-check.test.sh' \
-    || fail "exclusions must document continuity process-holder reason"
   printf '%s\n' "$out" | grep -Fq 'fm-watcher-lock.test.sh' \
     || fail "exclusions must document watcher-lock serial reason"
   printf '%s\n' "$out" | grep -Fq 'fm-backend-herdr-smoke.test.sh' \
@@ -109,89 +235,26 @@ test_list_exclusions_documents_reasons() {
 }
 
 test_family_map_labels_this_contract() {
-  local fam
+  local fam safe safe_max scheduled_first
   fam=$("$RUNNER" --list --family pure-contract-unit)
   printf '%s\n' "$fam" | grep -Fq 'tests/fm-test-isolation-proof.test.sh' \
     || fail "fm-test-isolation-proof.test.sh must map to pure-contract-unit"
+  safe=$("$RUNNER" --list-concurrent-safe-families)
+  printf '%s\n' "$safe" | grep -Fxq watcher-wake-lock \
+    || fail "runner must expose the admitted watcher concurrent-safe family"
+  printf '%s\n' "$safe" | grep -Fxq pure-contract-unit \
+    || fail "runner must expose the admitted contract-unit concurrent-safe family"
+  safe_max=$("$RUNNER" --concurrent-safe-family-jobs-max watcher-wake-lock)
+  [ "$safe_max" -eq 4 ] || fail "runner exposed the wrong watcher family worker cap: $safe_max"
+  safe_max=$("$RUNNER" --concurrent-safe-family-jobs-max pure-contract-unit)
+  [ "$safe_max" -eq 4 ] || fail "runner exposed the wrong contract-unit family worker cap: $safe_max"
+  scheduled_first=$("$RUNNER" --list-scheduled --family watcher-wake-lock | head -n 1)
+  [ "$scheduled_first" = tests/fm-watch-triage.test.sh ] \
+    || fail "runner scheduled the watcher family out of longest-hint order: $scheduled_first"
   pass "isolation-proof contract test is family-mapped"
 }
 
-test_aggregate_failure_under_concurrency() {
-  local tmp pass_f fail_f harness rc out
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-isolation-agg.XXXXXX")
-  pass_f="$tmp/pass.test.sh"
-  fail_f="$tmp/fail.test.sh"
-  cat >"$pass_f" <<'SH'
-#!/usr/bin/env bash
-echo "ok - pass"
-exit 0
-SH
-  cat >"$fail_f" <<'SH'
-#!/usr/bin/env bash
-echo "not ok - fail"
-exit 1
-SH
-  chmod +x "$pass_f" "$fail_f"
-  # Minimal fixture harness mirroring aggregate + concurrent wait semantics.
-  harness="$tmp/harness.sh"
-  cat >"$harness" <<'SH'
-#!/usr/bin/env bash
-set -eu
-jobs=$1
-shift
-pids=()
-rcs=()
-paths=()
-idx=0
-for s in "$@"; do
-  idx=$((idx + 1))
-  (
-    bash "$s"
-    echo $? >"${TMPDIR:-/tmp}/iso-rc-$idx"
-  ) &
-  pids+=("$!")
-  paths+=("$s")
-  while [ "${#pids[@]}" -ge "$jobs" ]; do
-    wait "${pids[0]}" || true
-    pids=("${pids[@]:1}")
-  done
-done
-while [ "${#pids[@]}" -gt 0 ]; do
-  wait "${pids[0]}" || true
-  pids=("${pids[@]:1}")
-done
-failed=0
-for i in $(seq 1 "$idx"); do
-  rc=$(cat "${TMPDIR:-/tmp}/iso-rc-$i" 2>/dev/null || echo 1)
-  [ "$rc" -eq 0 ] || failed=$((failed + 1))
-  rm -f "${TMPDIR:-/tmp}/iso-rc-$i"
-done
-echo "FM_ISOLATION_SUMMARY total=$idx failed=$failed"
-[ "$failed" -eq 0 ]
-SH
-  chmod +x "$harness"
-  set +e
-  out=$(TMPDIR="$tmp" bash "$harness" 2 "$pass_f" "$fail_f" 2>&1)
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "concurrent aggregate must fail when any candidate fails"
-  printf '%s\n' "$out" | grep -Fq 'FM_ISOLATION_SUMMARY total=2 failed=1' \
-    || fail "aggregate summary must report total=2 failed=1: $out"
-  rm -rf "$tmp"
-  pass "aggregate failure reporting survives concurrency"
-}
-
-test_phase4_consumes_proven_set_only() {
-  assert_present "$CI" "ci.yml missing"
-  assert_present "$RUNNER" "fm-test-run.sh missing"
-  # Phase 4 portable parallel lanes must exist and use lane selection, not --all.
-  grep -Fq 'bin/fm-test-run.sh --lane portable-parallel-1' "$CI" \
-    || fail "CI portable parallel 1 must use --lane portable-parallel-1"
-  grep -Fq 'bin/fm-test-run.sh --lane portable-parallel-2' "$CI" \
-    || fail "CI portable parallel 2 must use --lane portable-parallel-2"
-  grep -Fq 'bin/fm-test-run.sh --lane portable-serial' "$CI" \
-    || fail "CI portable serial must use --lane portable-serial"
-  # Shard union must equal this harness's proven list.
+test_parallel_shards_consume_the_proven_set() {
   local proven shards
   proven=$("$PROOF" --list | LC_ALL=C sort -u)
   shards=$(
@@ -202,33 +265,33 @@ test_phase4_consumes_proven_set_only() {
   )
   [ "$proven" = "$shards" ] \
     || fail "portable parallel shards must equal isolation-proof --list exactly"
-  # Local --jobs is bounded to this proven set (refuse is contract-tested in
-  # fm-test-run.test.sh); the option must exist.
-  grep -E '^[[:space:]]*--jobs\)' "$RUNNER" >/dev/null 2>&1 \
-    || fail "fm-test-run.sh must expose bounded --jobs after Phase 4"
-  pass "Phase 4 portable shards consume the proven-isolated set only"
+  pass "parallel shards consume the proven-isolated set only"
 }
 
-test_docs_record_proof_owner() {
-  assert_present "$PROOF_DOC" "docs/fm-test-isolation-proof.md missing"
-  grep -Fq 'bin/fm-test-isolation-proof.sh' "$PROOF_DOC" \
-    || fail "proof doc must name the harness owner"
-  grep -Fq 'production_sharding_enabled' "$PROOF_DOC" \
-    || fail "proof doc must record the archived proof-time sharding flag"
-  grep -Fq 'concurrency' "$PROOF_DOC" \
-    || fail "proof doc must record concurrency"
-  assert_present "$CONTRIB" "CONTRIBUTING.md missing"
-  grep -Fq 'fm-test-isolation-proof' "$CONTRIB" \
-    || fail "CONTRIBUTING must document the isolation-proof entry point"
-  pass "docs archive the isolation-proof owner and posture"
+# A fixture repository names its branch, so a suite that resolves `main` gets
+# the same answer wherever it runs. Without the pinned initial branch this
+# fails on any host whose init.defaultBranch is still master.
+test_fixture_repo_branch_is_pinned() {
+  local root dir config branch
+  root=$(fm_test_tmproot fm-fixture-branch-pin) || fail "could not create a fixture root"
+  dir="$root/repo"
+  config="$root/gitconfig"
+  printf '[init]\n\tdefaultBranch = master\n' > "$config"
+  GIT_CONFIG_GLOBAL="$config" fm_git_init_commit "$dir"
+  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD)
+  [ "$branch" = main ] \
+    || fail "fixture repo branch follows init.defaultBranch instead of main: $branch"
+  git -C "$dir" rev-parse main >/dev/null 2>&1 \
+    || fail "fixture repo cannot resolve main"
+  pass "fixture repositories pin their initial branch to main"
 }
 
+test_unknown_pool_is_refused
+test_family_pool_json_identifies_admission
 test_list_candidates_nonempty_and_stable
 test_candidates_exclude_serial_classes
-test_candidates_match_archived_proof
 test_extra_hermetic_candidates_present
 test_list_exclusions_documents_reasons
 test_family_map_labels_this_contract
-test_aggregate_failure_under_concurrency
-test_phase4_consumes_proven_set_only
-test_docs_record_proof_owner
+test_parallel_shards_consume_the_proven_set
+test_fixture_repo_branch_is_pinned

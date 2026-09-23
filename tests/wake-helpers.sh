@@ -32,13 +32,7 @@ fi
 # that channel, to exercise graceful degradation. Suites that do not source this
 # harness still cannot fire a real notification: the daemon defaults the seam to
 # "discard" whenever it is sourced (its library-mode guard).
-# Create the recorder dir with mktemp directly (not fm_test_tmproot, whose
-# first call installs an EXIT trap that, invoked inside a command-substitution
-# subshell, would delete the dir on subshell exit). Register it for the same
-# cleanup and install the trap in THIS shell if it is the first registration.
-_fm_wedge_rec_dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-wedge-rec.XXXXXX")
-if [ "${#FM_TEST_CLEANUP_DIRS[@]}" -eq 0 ]; then trap fm_test_cleanup EXIT; fi
-FM_TEST_CLEANUP_DIRS+=("$_fm_wedge_rec_dir")
+_fm_wedge_rec_dir=$(fm_test_tmproot fm-wedge-rec)
 cat > "$_fm_wedge_rec_dir/rec" <<'REC'
 #!/usr/bin/env bash
 printf '%s\t%s\n' "${1:-}" "${2:-}" >> "${FM_WEDGE_ALARM_LOG:-/dev/null}"
@@ -68,12 +62,31 @@ make_case() {
 #!/usr/bin/env bash
 set -u
 if [ "${1:-}" = "list-windows" ]; then
-  if [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
-    printf '%s\n' "$FM_FAKE_TMUX_WINDOW"
+  if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
+    printf '%s\n' "$FM_FAKE_TMUX_WINDOWS"
+  elif [ -n "${FM_FAKE_TMUX_WINDOW:-}" ]; then
+    printf '%s\n' "${FM_FAKE_TMUX_WINDOW#*:}"
   fi
   exit 0
 fi
 if [ "${1:-}" = "capture-pane" ]; then
+  if [ -n "${FM_FAKE_TMUX_CAPTURE_COUNT_FILE:-}" ]; then
+    _capture_count=$(cat "$FM_FAKE_TMUX_CAPTURE_COUNT_FILE" 2>/dev/null || echo 0)
+    printf '%s\n' "$((_capture_count + 1))" > "$FM_FAKE_TMUX_CAPTURE_COUNT_FILE"
+    if [ -n "${FM_FAKE_TMUX_CAPTURE_FAIL_AFTER:-}" ] \
+      && [ "$_capture_count" -ge "$FM_FAKE_TMUX_CAPTURE_FAIL_AFTER" ]; then
+      exit 1
+    fi
+  fi
+  if [ -n "${FM_FAKE_TMUX_FORBIDDEN_TARGET:-}" ]; then
+    _prev=
+    for _arg in "$@"; do
+      if [ "$_prev" = -t ] && [ "$_arg" = "$FM_FAKE_TMUX_FORBIDDEN_TARGET" ]; then
+        exit 1
+      fi
+      _prev=$_arg
+    done
+  fi
   if [ -n "${FM_FAKE_TMUX_CAPTURE:-}" ]; then
     cat "$FM_FAKE_TMUX_CAPTURE"
   fi
@@ -100,12 +113,16 @@ SH
 # A per-id override FM_FAKE_CREW_STATE_<sanitized-id> wins; otherwise the shared
 # FM_FAKE_CREW_STATE; otherwise an unknown verdict (NOT provably working), the
 # safe default so a test that forgets to set one surfaces rather than absorbs.
+# Exporting FM_FAKE_CREW_STATE_LOG appends one line per call, so a test that
+# asserts how many current-state reads a path spends - the reads are the costly
+# half of watcher triage - can count them instead of inferring them.
 make_fake_crew_state() {  # <fakebin>
   local fakebin=$1
   cat > "$fakebin/fm-crew-state.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
 id=${1:-}
+[ -z "${FM_FAKE_CREW_STATE_LOG:-}" ] || printf '%s\n' "$id" >> "$FM_FAKE_CREW_STATE_LOG"
 key=$(printf '%s' "$id" | tr -c 'A-Za-z0-9' '_')
 var="FM_FAKE_CREW_STATE_$key"
 val=${!var:-${FM_FAKE_CREW_STATE:-}}
@@ -114,6 +131,32 @@ exit 0
 SH
   chmod +x "$fakebin/fm-crew-state.sh"
   printf '%s\n' "$fakebin/fm-crew-state.sh"
+}
+
+# Prime <file>'s .seen-* marker to its CURRENT signature through the production
+# signature owner (bin/fm-wake-lib.sh), so a test can declare "everything in
+# this file was already surfaced or deliberately absorbed" before exercising
+# the next wake, self-announced append, or annotation decision.
+prime_status_seen() {  # <state> <file>
+  FM_STATE_OVERRIDE="$1" bash -c '
+    . "$1"
+    fm_wake_status_mark_current "$2" "$3"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$1" "$2"
+}
+
+# Print the generation from a recovery marker token of any status/kind.
+recovery_marker_generation() {  # <marker-file>
+  sed -n 's/^[^:]*:[^:]*:\(.*\)$/\1/p' "$1"
+}
+
+# Acknowledge a drain from its captured stderr (the WAKE_ACK_REQUIRED line).
+ack_drain_err() {  # <state> <stderr-file>
+  local state=$1 err=$2 sequence generation
+  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+  [ -n "$sequence" ] && [ -n "$generation" ] || return 1
+  FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-wake-drain.sh" \
+    --ack-through "$sequence" --recovery-generation "$generation"
 }
 
 make_supercase() {
@@ -139,9 +182,9 @@ case "${1:-}" in
     [ -n "${FM_FAKE_TMUX_WINDOW:-}" ] && printf '%s\n' "$FM_FAKE_TMUX_WINDOW"
     exit 0 ;;
   capture-pane)
-    # Honor a single-line band capture (-S N -E M, both non-negative) the way the
-    # composer reader now bounds its capture to the cursor row; otherwise (e.g.
-    # fm_pane_is_busy's "-S -40" tail) return the whole capture. -e is accepted and
+    # Honor a single-line band capture (-S N -E M, both non-negative) for the
+    # composer reader's non-bordered compatibility fallback; otherwise (e.g. its
+    # structural full-pane scan or fm_pane_is_busy's "-S -40" tail) return the whole capture. -e is accepted and
     # ignored: this fake emits plain text, which the dim-stripper passes through.
     _S=""; _E=""; shift
     while [ "$#" -gt 0 ]; do
@@ -200,15 +243,26 @@ make_bordered_case() {
   local name=$1 dir fakebin
   dir="$TMP_ROOT/$name"; fakebin="$dir/fakebin"
   mkdir -p "$dir/state" "$fakebin"
-  printf '│ > │\n' > "$dir/composer"
+  printf '╭─────╮\n│ >   │\n╰─────╯\n' > "$dir/composer"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
 COMPOSER="${FM_FAKE_COMPOSER:?FM_FAKE_COMPOSER unset}"
+write_composer() {
+  text=$1
+  width=$((${#text} + 4))
+  border=
+  i=0
+  while [ "$i" -lt "$width" ]; do
+    border="${border}─"
+    i=$((i + 1))
+  done
+  printf '╭%s╮\n│ > %s │\n╰%s╯\n' "$border" "$text" "$border" > "$COMPOSER"
+}
 case "${1:-}" in
   display-message)
     print=0
-    for a in "$@"; do case "$a" in *cursor_y*) printf '0\n'; exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
     for a in "$@"; do [ "$a" = "-p" ] && print=1; done
     [ "$print" = 1 ] && printf 'fakepane\n'
     exit 0 ;;
@@ -231,12 +285,12 @@ case "${1:-}" in
         [ "${FM_FAKE_PERSIST_SWALLOW:-0}" = 1 ] || rm -f "$FM_FAKE_SWALLOW"
       else
         [ -n "${FM_FAKE_SENT:-}" ] && printf '[ENTER]\n' >> "$FM_FAKE_SENT"
-        printf '│ > │\n' > "$COMPOSER"
+        write_composer ""
       fi
     elif [ "$lit" = 1 ]; then
       [ "${FM_FAKE_SEND_FAIL:-0}" = 1 ] && exit 1
       [ -n "${FM_FAKE_SENT:-}" ] && printf '%s\n' "$text" >> "$FM_FAKE_SENT"
-      printf '│ > %s │\n' "$text" > "$COMPOSER"
+      write_composer "$text"
     fi
     exit 0 ;;
 esac
@@ -246,6 +300,9 @@ SH
   printf '%s\n' "$dir"
 }
 
+# Only pass a process owned by this test. A deadline must also bound cleanup:
+# TERM can be ignored or remain pending on a stopped child, so never follow it
+# with an unbounded wait. Keep process evidence before the final owned-PID kill.
 wait_for_exit() {
   local pid=$1 limit=${2:-50} i=0
   while [ "$i" -lt "$limit" ]; do
@@ -256,7 +313,18 @@ wait_for_exit() {
     sleep 0.1
     i=$((i + 1))
   done
-  kill "$pid" 2>/dev/null || true
+  printf 'wait_for_exit: owned pid %s exceeded %s polls; sending TERM\n' "$pid" "$limit" >&2
+  ps -p "$pid" -o pid= -o ppid= -o stat= -o command= >&2 2>/dev/null || true
+  kill -TERM "$pid" 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 20 ] && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if is_live_non_zombie "$pid"; then
+    printf 'wait_for_exit: owned pid %s survived TERM; sending KILL\n' "$pid" >&2
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
   wait "$pid" 2>/dev/null || true
   return 124
 }

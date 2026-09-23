@@ -19,7 +19,7 @@ TMP_ROOT=$(fm_test_tmproot fm-merge-local-tests)
 make_case() {
   local name=$1 id=$2 branch=${3-} case_dir default
   case_dir="$TMP_ROOT/$name"
-  mkdir -p "$case_dir/state"
+  mkdir -p "$case_dir/state" "$case_dir/data"
   fm_git_init_commit "$case_dir/project"
   default=$(git -C "$case_dir/project" symbolic-ref --short HEAD)
   if [ -n "$branch" ]; then
@@ -43,7 +43,9 @@ run_merge_local() {
   local case_dir=$1
   shift
   FM_ROOT_OVERRIDE="$ROOT" \
+  FM_HOME="$case_dir" \
   FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
     "$MERGE_LOCAL" "$@"
 }
 
