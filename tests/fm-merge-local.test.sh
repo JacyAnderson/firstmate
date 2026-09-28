@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Tests for bin/fm-merge-local.sh: the guarded local-only fast-forward merge.
 #
-# Task branches are named with the bare task id; older briefs created fm/<id>.
-# The merge must resolve the task branch under either name so in-flight legacy
-# tasks keep landing, and must still refuse when neither branch exists.
+# A task record from before the meta branch field names no branch. Its worker
+# created either the bare task-id branch or the older fm/<id> one, so the merge
+# must land whichever exists and still refuse when neither does.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -69,18 +69,16 @@ test_legacy_fm_branch_merges() {
   pass "fm-merge-local merges a legacy fm/ task branch"
 }
 
-test_missing_branch_refuses_naming_both_forms() {
+test_missing_branch_refuses() {
   local case_dir err rc=0
   case_dir=$(make_case missing task-m1 "")
   err=$(run_merge_local "$case_dir" task-m1 2>&1) || rc=$?
   expect_code 1 "$rc" "missing: merge must fail when no task branch exists"
-  assert_contains "$err" "no task branch for task-m1" \
+  assert_contains "$err" "branch fm/task-m1 does not exist" \
     "missing: error must say the task branch is absent"
-  assert_contains "$err" "legacy 'fm/task-m1'" \
-    "missing: error must show that the legacy form was also checked"
   pass "fm-merge-local refuses cleanly when neither branch form exists"
 }
 
 test_bare_slug_branch_merges
 test_legacy_fm_branch_merges
-test_missing_branch_refuses_naming_both_forms
+test_missing_branch_refuses

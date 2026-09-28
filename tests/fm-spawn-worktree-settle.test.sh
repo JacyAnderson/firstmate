@@ -173,7 +173,7 @@ test_already_settled_pane_costs_one_confirm_read() {
   assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" \
     "meta did not record the already-settled worktree"
   reads=$(cat "$COUNTFILE")
-  [ "$reads" -eq 2 ] || fail "already-settled pane took $reads reads to confirm - expected the first read plus one confirmation"
+  [ "$reads" -eq 3 ] || fail "already-settled pane took $reads reads to confirm - expected the first read, one confirmation, and the launch-boundary cwd check"
   pass "an already-settled pane confirms on the next read, not a whole extra cycle"
 }
 
@@ -373,13 +373,15 @@ test_invalid_budget_is_refused_before_spawning() {
 # rather than faked.
 
 # make_secondmate_home seeds the minimum a --secondmate spawn accepts as a
-# firstmate home: the home marker naming this task, AGENTS.md, and bin/. It is
-# a sibling of the active home, never inside it, since a secondmate home nested
-# in the active home is itself refused.
+# firstmate home: a git checkout (the spawn installs commit hooks there) with
+# the home marker naming this task, AGENTS.md, and bin/. It is a sibling of the
+# active home, never inside it, since a secondmate home nested in the active
+# home is itself refused.
 make_secondmate_home() {
   local case_dir=$1 id=$2 sm_home
   sm_home="$case_dir/secondmate-home"
   mkdir -p "$sm_home/bin" "$sm_home/data" "$sm_home/state" "$sm_home/config" "$sm_home/projects"
+  git init -q "$sm_home"
   printf '%s\n' "$id" > "$sm_home/.fm-secondmate-home"
   printf 'secondmate home\n' > "$sm_home/AGENTS.md"
   printf '%s\n' "$sm_home"

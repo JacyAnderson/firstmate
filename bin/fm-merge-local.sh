@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Perform the approved local merge for a local-only ship task: fast-forward the
-# project's default branch to the crewmate's task branch. Task branches are named
-# with the bare task id (<id>); the legacy fm/<id> form from older briefs is
-# accepted equally, so in-flight legacy tasks keep merging.
+# project's default branch to the crewmate's immutable ship branch recorded in
+# state/<task-id>.meta. A record created before that field existed names no
+# branch, so the bare "<id>" branch is used when it exists and "fm/<id>" otherwise.
 #
 # This is firstmate's merge gate-action (the captain's merge authority applied
 # locally instead of via a GitHub PR). It is the one sanctioned exception to hard
@@ -95,15 +95,16 @@ default_branch() {
   return 1
 }
 
-# Current convention is the bare task id; older briefs created fm/<id>.
-BRANCH=""
-for candidate in "$ID" "fm/$ID"; do
-  if git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$candidate" >/dev/null; then
-    BRANCH=$candidate
-    break
-  fi
-done
-[ -n "$BRANCH" ] || { echo "error: no task branch for $ID in $PROJ (looked for '$ID' and legacy 'fm/$ID')" >&2; exit 1; }
+BRANCH=$(grep '^branch=' "$META" | cut -d= -f2- || true)
+if [ -z "$BRANCH" ]; then
+  BRANCH="fm/$ID"
+  git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$ID" >/dev/null && BRANCH=$ID
+fi
+if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
+  echo "error: task $ID has an invalid recorded ship branch '$BRANCH'" >&2
+  exit 1
+fi
+git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH does not exist in $PROJ" >&2; exit 1; }
 
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
@@ -144,4 +145,6 @@ fm_lock_release "$MERGE_CONTROL_LOCK" || true
 MERGE_CONTROL_LOCK=
 [ "$merge_status" -eq 0 ] || exit "$merge_status"
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
+# Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
+[ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"
