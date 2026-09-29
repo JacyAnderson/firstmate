@@ -1,0 +1,93 @@
+## setup: seed repo (contains bin/fm-upstream-sync.sh from the change), bare upstream.git + fork.git; upstream adds fm/ default in hotspot bin/fm-spawn.sh + README, fork keeps bare <id>
+===== S1: status - fork behind upstream, hotspot conflict, fm/ lines; checkout untouched
+upstream: upstream/main 2ea6361dda2b8390fb3878ae0f94d1eecae32326
+fork: origin/main 846b0f6817430736e9679f2cfa6e151c27c666ba
+merge-base: 508a951cfff8733cb852cb701e69eca41165c870
+behind: 1
+ahead: 1
+upstream-push: ENABLED /var/folders/19/wqjmq1wj2vdc4c_4zv_fhc4h0000gn/T//fm-usync.KL2cAz/upstream.git
+conflict: bin/fm-spawn.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh; FM_SPAWN_WORKTREE_TIMEOUT and the branchless-record relaunch fallback)
+review: docs.txt
+fm-prefix: bin/fm-spawn.sh +1
+summary: conflicts=1
+exit=0
+HEAD unchanged: yes  branch: main  porcelain: []  local branches: main
+===== S2: upstream push disabled with the skill's placeholder
+upstream-push: disabled DISABLED
+===== S3: no explicit pushurl, but pushInsteadOf rewrites upstream to a pushable ssh URL
+git remote get-url --push upstream -> git@example.invalid:upstream.git
+upstream-push: ENABLED git@example.invalid:upstream.git
+===== S4: explicit alternate ssh pushurl
+upstream-push: ENABLED git@github.com:kunchenguid/firstmate.git
+===== S4b: pushurl identical to fetch URL (local path)
+upstream-push: ENABLED /var/folders/19/wqjmq1wj2vdc4c_4zv_fhc4h0000gn/T//fm-usync.KL2cAz/upstream.git
+===== S5: merge refusals (all exit 2, nothing changes)
+fm-upstream-sync: refusing to merge on the fork's default branch 'main'
+exit=2 (on main)
+fm-upstream-sync: HEAD is detached; pass --branch <name> or check out a sync branch
+exit=2 (detached, no --branch)
+fm-upstream-sync: HEAD does not contain origin/main; start the sync branch from the fork tip
+exit=2 (HEAD lacks fork tip)
+fm-upstream-sync: tracked changes present; commit or move them aside first
+exit=2 (tracked changes)
+fm-upstream-sync: refusing to merge on the fork's default branch 'main'
+exit=2 (--branch main)
+after refusals: branch=main branches: main
+===== S6: merge --branch fails outright (untracked newfile would be overwritten) -> branch deleted, HEAD back on main
+branch: sync-1
+upstream: upstream/main 2ea6361dda2b8390fb3878ae0f94d1eecae32326
+merge-base: 508a951cfff8733cb852cb701e69eca41165c870
+error: The following untracked working tree files would be overwritten by merge:
+	newfile
+Please move or remove them before you merge.
+Aborting
+Merge with strategy ort failed.
+fm-upstream-sync: git merge failed without leaving a merge to resolve
+exit=2
+current branch: main; branches: main
+===== S7: retry same --branch; conflict left in index, exit 1
+branch: sync-1
+upstream: upstream/main 2ea6361dda2b8390fb3878ae0f94d1eecae32326
+merge-base: 508a951cfff8733cb852cb701e69eca41165c870
+conflict: bin/fm-spawn.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh; FM_SPAWN_WORKTREE_TIMEOUT and the branchless-record relaunch fallback)
+review: docs.txt
+fm-prefix: bin/fm-spawn.sh +1
+summary: conflicts=1
+exit=1
+M  README.md
+UU bin/fm-spawn.sh
+M  docs.txt
+A  newfile
+--- S7b: merge while a merge is in progress is refused
+fm-upstream-sync: a merge is already in progress; finish or abort it first
+exit=2
+--- resolve keeping fork bare <id> default, finish with git commit --no-edit
+*   e362a35 Merge upstream firstmate 2ea6361d into the fork
+|\  
+| * 2ea6361 upstream change
+* | 846b0f6 fork change
+|/  
+* 508a951 base
+HEAD^2:        2ea6361dda2b8390fb3878ae0f94d1eecae32326
+upstream tip:  2ea6361dda2b8390fb3878ae0f94d1eecae32326
+merge subject: Merge upstream firstmate 2ea6361d into the fork
+===== S8: nothing pushed anywhere
+upstream.git main=2ea6361dda2b8390fb3878ae0f94d1eecae32326 (up-work: 2ea6361dda2b8390fb3878ae0f94d1eecae32326)
+fork.git refs: main=846b0f6 ; fork local main=846b0f6
+===== S9: rerun merge on the finished sync branch -> current
+summary: current
+exit=0
+===== S10: clean merge path on a fresh fork state (non-conflicting upstream change), existing sync branch without --branch
+review: docs.txt
+fm-prefix: bin/fm-spawn.sh +1
+summary: conflicts=1
+branch: sync-2
+upstream: upstream/main 289ad9152bbbc941c5e690bdbecb58d66211992c
+merge-base: 508a951cfff8733cb852cb701e69eca41165c870
+conflict: bin/fm-spawn.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh; FM_SPAWN_WORKTREE_TIMEOUT and the branchless-record relaunch fallback)
+review: docs.txt
+fm-prefix: bin/fm-spawn.sh +1
+summary: conflicts=1
+exit=1
+parents: 508a951cfff8733cb852cb701e69eca41165c870
+upstream tip: 289ad9152bbbc941c5e690bdbecb58d66211992c

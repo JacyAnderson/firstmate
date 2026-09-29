@@ -1,0 +1,36 @@
+## setup: fork3 = fork whose only change is a non-conflicting README2.md; upstream as before
+===== S10: status then clean merge --branch -> real merge commit, exit 0
+upstream: upstream/main 289ad9152bbbc941c5e690bdbecb58d66211992c
+fork: origin/main badb713e629df9789da73d6d2e39972f70eb9e5f
+merge-base: 508a951cfff8733cb852cb701e69eca41165c870
+behind: 2
+ahead: 1
+upstream-push: disabled DISABLED
+fm-prefix: bin/fm-spawn.sh +1
+summary: clean
+exit=0
+branch: sync-clean
+upstream: upstream/main 289ad9152bbbc941c5e690bdbecb58d66211992c
+merge-base: 508a951cfff8733cb852cb701e69eca41165c870
+fm-prefix: bin/fm-spawn.sh +1
+summary: clean
+exit=0
+on branch: sync-clean
+*   5ded25b Merge upstream firstmate 289ad915 into the fork
+|\  
+| * 289ad91 upstream clean
+| * 2ea6361 upstream change
+* | badb713 fork-only change
+|/  
+* 508a951 base
+HEAD^1=badb713 (fork tip badb713); HEAD^2=289ad91 (upstream tip 289ad91)
+fork3.git main still: badb713 ; upstream.git main: 289ad91
+===== S11: fork already contains upstream -> status summary: current
+upstream: upstream/main 289ad9152bbbc941c5e690bdbecb58d66211992c
+fork: origin/main 5ded25bea6d853a08c56c5fa39acf4787a1ccfca
+merge-base: 289ad9152bbbc941c5e690bdbecb58d66211992c
+behind: 0
+ahead: 2
+upstream-push: disabled DISABLED
+summary: current
+exit=0

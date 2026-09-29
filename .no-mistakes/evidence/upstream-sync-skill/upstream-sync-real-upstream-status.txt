@@ -1,0 +1,16 @@
+## real-world: clone of this change (7df49d1) as the fork with origin = local bare copy; upstream = https://github.com/kunchenguid/firstmate (fetch only, push DISABLED)
+$ bin/fm-upstream-sync.sh
+upstream: upstream/main c5f48e4cad279e6acaf14208522c44e28fac6835
+fork: origin/main 7df49d15406006aa30a5cc49009c7a679d5f2bf3
+merge-base: eb219c80f6bba1e89ffe77ec51c517abbab76a1c
+behind: 6
+ahead: 77
+upstream-push: disabled DISABLED
+review: .agents/skills/operational-home-layout/SKILL.md (hotspot: fork entries for Mission Control and pr-comments)
+review: bin/fm-watch.sh
+review: docs/architecture.md (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh)
+review: docs/configuration.md
+review: docs/scripts.md (hotspot: keep the fork's rows (fm-text-check.sh, fm-upstream-sync.sh, review-comment poll))
+summary: clean
+exit=0
+porcelain after: [] branch: main
