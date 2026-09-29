@@ -4,6 +4,7 @@ description: >-
   Self-update a running firstmate and its secondmates to the latest from origin.
   Use when the captain invokes /updatefirstmate (e.g. "/updatefirstmate", "update firstmate", "pull the latest firstmate").
   Updates this firstmate repo's default branch and every local or remote secondmate through its guarded convergence path (never forced, never disruptive), then re-reads AGENTS.md and restarts every live second mate through the persist-gated restart, with a fallback re-read nudge only where a restart cannot be proven.
+  Also use when the captain asks to pull, sync, or merge upstream firstmate changes into this fork; its Upstream sync section owns that routine.
 user-invocable: true
 metadata:
   internal: true
@@ -105,3 +106,28 @@ This touches only the firstmate repo and its own worktrees, never anything under
   A restart replaces that mate's agent in the same home and endpoint after its open work is written down; it is never a teardown and never forced.
   Its crewmates keep running in their own endpoints, and every durable record - backlog, held captain calls, unread status, unhandled instructions - is re-presented to the replacement at startup.
   A restart refused before it is attempted leaves that mate on the re-read path; once a relaunch is attempted, any failed or ambiguous result is reported as unknown rather than attributed to either incarnation.
+
+## Upstream sync (this fork only)
+
+This fork's origin is the fork itself, and `upstream` is the template repository, which is fetch-only: never push to it or open a PR against it.
+The update above only fast-forwards from origin, so upstream changes reach the fleet only after a sync merges them into origin's default branch.
+`bin/fm-upstream-sync.sh`'s header owns the report format, the merge refusals, and the list of recurring conflict hotspots.
+
+1. **Report.**
+   Run `bin/fm-upstream-sync.sh` from this home.
+   It fetches, then prints how many upstream commits the fork lacks, the files a dry-run merge conflicts on, the files both sides changed that still merge, a note on each known hotspot, and upstream lines that bring back an `fm/` branch default; it changes no branch or file.
+   Give the captain those counts and files as outcomes.
+   On `summary: current`, say the fork is up to date and stop.
+   On `upstream-push: ENABLED`, say so and ask the captain to disable upstream pushes (`git remote set-url --push upstream DISABLED`) before going further.
+2. **Merge only on the captain's go.**
+   Dispatch a ship task on the firstmate repo through its registered delivery path, and have its instructions require the worker to:
+   - run `bin/fm-upstream-sync.sh merge` on its task branch, which makes a real merge, and never rebase, squash, or rebuild the branch from upstream;
+   - resolve each conflict and check each both-sides file for a fork change upstream now supersedes or silently undoes, then carry each fork change onto upstream's structure or drop it where upstream covers it;
+   - route any upstream `fm/` default back to `FM_DEFAULT_BRANCH_PREFIX` in `bin/fm-branch-prefix-lib.sh`, and add a `hotspot_note` entry for any new conflict that will recur;
+   - when the merge stopped on conflicts (exit 1), finish it with `git commit --no-edit` once they are resolved, so the merge keeps upstream's tip as its second parent; a clean merge (exit 0) is already committed;
+   - write the PR description as the earlier syncs did (JacyAnderson/firstmate PR #17): the upstream fixes that matter to this fleet, each fork change and whether it was carried, adapted, or dropped as superseded, and Conflict notes naming each conflicting file, what each side changed, and the resolution.
+3. **Land it with a merge commit.**
+   When the captain approves the merge, pass `-- --merge` to `bin/fm-pr-merge.sh`.
+   Its GitHub default is a squash, which would drop upstream's history from the fork and make the next sync conflict on every change again.
+4. **Update the fleet.**
+   Run the update above so this home and every second mate pick up the merged result.
