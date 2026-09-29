@@ -26,10 +26,14 @@
 # superseded or silently undone. fm-prefix lines count upstream-added lines
 # naming an fm/ branch, because upstream defaults ship branches to fm/<id>
 # while the fork's default is the bare <id> (FM_DEFAULT_BRANCH_PREFIX in
-# bin/fm-branch-prefix-lib.sh). upstream-push reads disabled only when the
-# upstream remote's effective push URL (after pushInsteadOf) cannot name a
+# bin/fm-branch-prefix-lib.sh). upstream-push reads disabled only when none
+# of the upstream remote's effective push URLs (after pushInsteadOf) can name a
 # remote: no scheme://, no scp-style [user@]host:path, and no existing local
-# path, like the DISABLED placeholder. Anything else reads ENABLED.
+# path, like the DISABLED placeholder. Anything else reads ENABLED, naming the
+# first usable URL with any scheme://user:secret@ userinfo removed. A dry run
+# that conflicts without naming a file prints `conflict: (unlisted)`. Each
+# branch is fetched by name, so one deleted on its remote is an error rather
+# than a stale tracking ref.
 #
 # merge [--branch <name>] fetches, then merges the upstream tip into the
 # current branch with a real merge commit whose second parent is that tip, so
@@ -51,6 +55,10 @@
 #
 # Usage: fm-upstream-sync.sh [status | merge [--branch <name>]] [--help]
 set -eu
+# A hook or wrapper can export these, which would point every git call below at
+# another repository. Config variables stay, so pushInsteadOf still applies.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_INDEX_FILE \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -64,6 +72,11 @@ FORK_REF="refs/remotes/$FORK_REMOTE/$FORK_BRANCH"
 usage() { echo "usage: fm-upstream-sync.sh [status | merge [--branch <name>]] [--help]" >&2; }
 die() { echo "fm-upstream-sync: $*" >&2; exit 2; }
 g() { git -C "$REPO" "$@"; }
+
+# Hides the userinfo of a scheme://user:secret@host URL.
+redact_url() {  # <url>
+  printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@#\1#'
+}
 
 push_url_usable() {  # <url>
   case "$1" in *://*) return 0 ;; esac
@@ -120,10 +133,12 @@ print_paths() {  # <label> ; paths on stdin
 fetch_remotes() {
   g remote get-url "$UP_REMOTE" >/dev/null 2>&1 || die "no '$UP_REMOTE' remote; add upstream firstmate as a fetch-only remote"
   g remote get-url "$FORK_REMOTE" >/dev/null 2>&1 || die "no '$FORK_REMOTE' remote"
-  g fetch --quiet "$FORK_REMOTE" || die "fetching '$FORK_REMOTE' failed"
-  g fetch --quiet "$UP_REMOTE" || die "fetching '$UP_REMOTE' failed"
-  g rev-parse --verify --quiet "$UP_REF^{commit}" >/dev/null || die "$UP_REMOTE/$UP_BRANCH does not exist"
-  g rev-parse --verify --quiet "$FORK_REF^{commit}" >/dev/null || die "$FORK_REMOTE/$FORK_BRANCH does not exist"
+  # Naming each branch in the refspec makes a branch deleted on its remote fail
+  # the fetch, rather than leaving a stale tracking ref to be read as current.
+  g fetch --quiet "$FORK_REMOTE" "+refs/heads/$FORK_BRANCH:$FORK_REF" \
+    || die "fetching $FORK_BRANCH from '$FORK_REMOTE' failed; does the branch exist there?"
+  g fetch --quiet "$UP_REMOTE" "+refs/heads/$UP_BRANCH:$UP_REF" \
+    || die "fetching $UP_BRANCH from '$UP_REMOTE' failed; does the branch exist there?"
 }
 
 # Both-sides and fm/ scans for the sync from <base> to the upstream tip, with
@@ -146,24 +161,29 @@ report_details() {  # <base> <fork-side-ref> <conflicts>
 }
 
 cmd_status() {
-  local up fork base behind ahead push_url tree_out rc conflicts n
+  local up fork base behind ahead url push_url="" push_state=disabled tree_out rc conflicts n
   fetch_remotes
   up=$(g rev-parse "$UP_REF")
   fork=$(g rev-parse "$FORK_REF")
   base=$(g merge-base "$FORK_REF" "$UP_REF") || die "the fork and upstream share no history"
   behind=$(g rev-list --count "$FORK_REF..$UP_REF")
   ahead=$(g rev-list --count "$UP_REF..$FORK_REF")
-  push_url=$(g remote get-url --push "$UP_REMOTE")
+  # A push goes to every configured push URL, so any usable one enables it.
+  while IFS= read -r url; do
+    [ -n "$url" ] || continue
+    if push_url_usable "$url"; then
+      push_state=ENABLED
+      push_url=$url
+      break
+    fi
+    [ -n "$push_url" ] || push_url=$url
+  done < <(g remote get-url --push --all "$UP_REMOTE")
   printf 'upstream: %s/%s %s\n' "$UP_REMOTE" "$UP_BRANCH" "$up"
   printf 'fork: %s/%s %s\n' "$FORK_REMOTE" "$FORK_BRANCH" "$fork"
   printf 'merge-base: %s\n' "$base"
   printf 'behind: %s\n' "$behind"
   printf 'ahead: %s\n' "$ahead"
-  if push_url_usable "$push_url"; then
-    printf 'upstream-push: ENABLED %s\n' "$push_url"
-  else
-    printf 'upstream-push: disabled %s\n' "$push_url"
-  fi
+  printf 'upstream-push: %s %s\n' "$push_state" "$(redact_url "$push_url")"
   if [ "$behind" -eq 0 ]; then
     echo "summary: current"
     return 0
@@ -172,7 +192,11 @@ cmd_status() {
   tree_out=$(g merge-tree --write-tree --name-only --no-messages "$FORK_REF" "$UP_REF") || rc=$?
   case "$rc" in
     0) conflicts="" ;;
-    1) conflicts=$(printf '%s\n' "$tree_out" | sed 1d) ;;
+    1)
+      conflicts=$(printf '%s\n' "$tree_out" | sed 1d)
+      # git merge-tree can report a conflict without naming a file.
+      [ -n "$conflicts" ] || conflicts="(unlisted)"
+      ;;
     *) die "dry-run merge failed (git merge-tree --write-tree needs git 2.38 or newer)" ;;
   esac
   report_details "$base" "$FORK_REF" "$conflicts"

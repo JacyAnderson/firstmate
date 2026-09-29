@@ -4,9 +4,12 @@
 # Each world has a bare "upstream" repository, a bare "fork" repository cloned
 # from it, and a working clone of the fork with origin = fork and
 # upstream = upstream. The guarantees under test:
-#   - status reports behind/ahead counts, dry-run conflicts, files both sides
-#     changed, hotspot notes, and upstream-added fm/ lines, and changes no local
-#     branch, HEAD, index, or working tree.
+#   - status reports behind/ahead counts, dry-run conflicts (including one git
+#     merge-tree does not name), files both sides changed, hotspot notes,
+#     upstream-added fm/ lines, and any usable upstream push URL with its
+#     credentials removed, and changes no local branch, HEAD, index, or working
+#     tree. It reads the fork checkout despite an inherited GIT_DIR and refuses a
+#     branch deleted on its remote.
 #   - merge refuses the default branch, a detached HEAD without --branch, a
 #     dirty tree, and a HEAD missing the fork tip.
 #   - merge makes a real two-parent merge commit with upstream's tip as the
@@ -145,6 +148,63 @@ test_status_flags_alternate_upstream_push_url() {
   pass "status flags an upstream push URL that differs from the fetch URL"
 }
 
+test_status_checks_every_push_url_and_redacts() {
+  local w
+  w=$(new_world pushall)
+  git -C "$w/work" remote set-url --add --push upstream "https://user:s3cret@example.invalid/firstmate.git"
+  run_sync "$w" status
+  expect_code 0 "$RC" "status with a second, usable push URL"
+  assert_contains "$OUT" "upstream-push: ENABLED https://example.invalid/firstmate.git" "a usable push URL after DISABLED is flagged"
+  assert_not_contains "$OUT" "s3cret" "credentials in a remote URL are not printed"
+  pass "status checks every upstream push URL and redacts credentials"
+}
+
+test_status_refuses_a_branch_deleted_upstream() {
+  local w
+  w=$(new_world deleted)
+  run_sync "$w" status
+  expect_code 0 "$RC" "status before the upstream branch is deleted"
+  git -C "$w/upstream.git" branch -q -m main trunk
+  run_sync "$w" status
+  expect_code 2 "$RC" "status after the upstream branch is deleted"
+  assert_contains "$OUT" "fetching main from 'upstream' failed" "the missing branch is named instead of using the stale tracking ref"
+  pass "status refuses a branch deleted on its remote"
+}
+
+test_status_ignores_inherited_git_dir() {
+  local w fork
+  w=$(new_world gitdir)
+  fork=$(git -C "$w/fork.git" rev-parse main)
+  RC=0
+  OUT=$(GIT_DIR="$w/up-src/.git" GIT_WORK_TREE="$w/up-src" FM_ROOT_OVERRIDE="$w/work" "$SYNC" status 2>&1) || RC=$?
+  expect_code 0 "$RC" "status with an inherited GIT_DIR"
+  assert_contains "$OUT" "fork: origin/main $fork" "status reads the fork checkout, not the inherited repository"
+  pass "status ignores an inherited GIT_DIR"
+}
+
+test_status_treats_unlisted_conflict_as_conflict() {
+  local w real_git
+  w=$(new_world unlisted)
+  upstream_commit "$w" other.md "other upstream" "upstream other"
+  real_git=$(command -v git)
+  mkdir -p "$w/fakebin"
+  cat > "$w/fakebin/git" <<SH
+#!/usr/bin/env bash
+if [ "\${3:-}" = merge-tree ]; then
+  printf '%s\n' 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+  exit 1
+fi
+exec "$real_git" "\$@"
+SH
+  chmod +x "$w/fakebin/git"
+  RC=0
+  OUT=$(PATH="$w/fakebin:$PATH" FM_ROOT_OVERRIDE="$w/work" "$SYNC" status 2>&1) || RC=$?
+  expect_code 0 "$RC" "status when merge-tree reports a conflict without a path"
+  assert_contains "$OUT" "conflict: (unlisted)" "an unnamed conflict is reported"
+  assert_contains "$OUT" "summary: conflicts=1" "an unnamed conflict is not summarized as clean"
+  pass "status treats a merge-tree conflict without a path as a conflict"
+}
+
 test_status_fails_without_upstream_remote() {
   local w
   w=$(new_world noremote)
@@ -242,6 +302,10 @@ test_status_hotspot_and_review
 test_status_flags_enabled_upstream_push
 test_status_flags_alternate_upstream_push_url
 test_status_fails_without_upstream_remote
+test_status_checks_every_push_url_and_redacts
+test_status_refuses_a_branch_deleted_upstream
+test_status_ignores_inherited_git_dir
+test_status_treats_unlisted_conflict_as_conflict
 test_merge_refusals
 test_merge_clean_creates_real_merge_and_never_pushes
 test_merge_failure_removes_created_branch

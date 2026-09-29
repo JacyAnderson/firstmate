@@ -124,7 +124,7 @@ The update above only fast-forwards from origin, so upstream changes reach the f
    - run `bin/fm-upstream-sync.sh merge` on its task branch, which makes a real merge, and never rebase, squash, or rebuild the branch from upstream;
    - resolve each conflict and check each both-sides file for a fork change upstream now supersedes or silently undoes, then carry each fork change onto upstream's structure or drop it where upstream covers it;
    - route any upstream `fm/` default back to `FM_DEFAULT_BRANCH_PREFIX` in `bin/fm-branch-prefix-lib.sh`, and add a `hotspot_note` entry for any new conflict that will recur;
-   - finish with `git commit --no-edit`, so the merge keeps upstream's tip as its second parent;
+   - when the merge stopped on conflicts (exit 1), finish it with `git commit --no-edit` once they are resolved, so the merge keeps upstream's tip as its second parent; a clean merge (exit 0) is already committed;
    - write the PR description as the earlier syncs did (JacyAnderson/firstmate PR #17): the upstream fixes that matter to this fleet, each fork change and whether it was carried, adapted, or dropped as superseded, and Conflict notes naming each conflicting file, what each side changed, and the resolution.
 3. **Land it with a merge commit.**
    When the captain approves the merge, pass `-- --merge` to `bin/fm-pr-merge.sh`.
