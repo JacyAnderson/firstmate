@@ -1,0 +1,14 @@
+## fm-brief.sh demo-a1 plainproj --mode direct-PR   (no --branch-prefix)
+scaffolded: /tmp/fmlab.yGIa/home/data/demo-a1/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+16:You are in a disposable git worktree of plainproj, at a detached HEAD on a clean default branch.
+20:If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append `blocked [at=<epoch>]: launched in primary checkout, not an isolated worktree` to the status file and stop.
+22:1. First action: create your branch: `git checkout -b demo-a1 --`
+25:1. Never push to the default branch (push only your `demo-a1` branch). Never merge a PR.
+110:Ship branch: demo-a1
+112:The task is complete only when committed on your branch.
+113:When it is implemented and committed, push your branch and open a PR with `gh-axi` whose description follows the PR/MR shape in rule 8 and that is ready for review, not a draft.
+117:That `done:` is accepted only when this copy's HEAD - your latest commit - is pushed to your PR branch; the check tests that commit, not merely that a branch moved.
+
+## fm-brief.sh demo-b2 fixproj --mode direct-PR --branch-prefix fix/   (explicit prefix)
+scaffolded: /tmp/fmlab.yGIa/home/data/demo-b2/brief.md (ship, mode=direct-PR; replace {TASK} and {FIRSTMATE_SPEC})
+22:1. First action: create your branch: `git checkout -b fix/demo-b2 --`

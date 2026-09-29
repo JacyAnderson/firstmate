@@ -1,0 +1,13 @@
+## fm-project-mode.sh --branch-prefix against a disposable registry
+plainproj -> []
+fixproj -> [fix/]
+fmproj -> [fm/]
+ghostproj -> [warn: project "ghostproj" not in registry; defaulting to no-mistakes off]
+## default output unchanged
+no-mistakes on
+## no registry at all
+  warn: no registry at /tmp/fmlab.yGIa/empty/data/projects.md; defaulting x to no-mistakes off
+  
+stdout=[]
+## does registry parser still load fm-dod-lib stack? (bash -x trace of sourced files)
+. /Users/jacyanderson/.no-mistakes/worktrees/f75ba0a84ab1/01M3NK6W31BHYTSG1MFACPG4Z3/bin/fm-branch-prefix-lib.sh

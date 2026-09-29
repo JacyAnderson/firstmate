@@ -1,0 +1,21 @@
+$ fm-brief.sh sp-a1 proj --mode no-mistakes   # registry: proj [no-mistakes branch=fix/]
+22:1. First action: create your branch: `git checkout -b sp-a1 --`
+$ fm-spawn.sh sp-a1 <proj> claude --mode no-mistakes --yolo off   (no --branch-prefix)
+notice: sp-a1 ships branch=sp-a1 while proj registers the ship-branch prefix 'fix/' (branch fix/sp-a1) - the task's branch will not follow the project's registered naming; proceed only on a current explicit captain instruction or an intake judgment you can state
+spawned sp-a1 harness=claude kind=ship mode=no-mistakes yolo=off window=firstmate:fm-sp-a1 worktree=/Users/jacyanderson/.treehouse/proj-bdb630/1/proj
+state/sp-a1.meta: branch=sp-a1
+
+$ fm-spawn.sh sp-a4 <plain> claude --mode no-mistakes --yolo off   # registry: plain [no-mistakes] (no prefix)
+spawned sp-a4 harness=claude kind=ship mode=no-mistakes yolo=off window=firstmate:fm-sp-a4 worktree=/Users/jacyanderson/.treehouse/plain-e5dc92/1/plain
+state/sp-a4.meta: branch=sp-a4
+
+$ fm-spawn.sh sp-a3 ... --branch-prefix fm/   # brief was scaffolded with the bare default
+error: branch mismatch for sp-a3: the brief says branch=sp-a3 but this spawn selected branch=fm/sp-a3
+state/sp-a3.meta exists? no
+
+$ tmux list-windows (private lab socket)
+firstmate:1: zsh~* (1 panes) [80x24] 
+firstmate:2: fm-sp-a1 (1 panes) [80x24] 
+firstmate:3: fm-sp-a4 (1 panes) [80x24] 
+$ git branch in the sp-a1 worktree
+sp-a1

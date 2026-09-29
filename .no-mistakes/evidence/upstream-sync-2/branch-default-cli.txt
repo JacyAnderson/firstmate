@@ -1,0 +1,32 @@
+=== S1 fm-project-mode.sh --branch-prefix (registry parser default) ===
+plainproj -> []
+fixproj -> [fix/]
+fmproj -> [fm/]
+unknownproj -> [warn: project "unknownproj" not in registry; defaulting to no-mistakes off]
+--- absent registry ---
+[warn: no registry at /tmp/fmlab.JUWv/nodata/projects.md; defaulting x to no-mistakes off]
+--- plain posture unchanged ---
+no-mistakes off
+direct-PR off
+
+=== S2 fm-brief.sh ship brief without --branch-prefix ===
+scaffolded: /tmp/fmlab.JUWv/home/data/bare-a1/brief.md (ship, mode=no-mistakes; replace {TASK} and {FIRSTMATE_SPEC})
+16:You are in a disposable git worktree of plainproj, at a detached HEAD on a clean default branch.
+20:If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append `blocked [at=<epoch>]: launched in primary checkout, not an isolated worktree` to the status file and stop.
+22:1. First action: create your branch: `git checkout -b bare-a1 --`
+26:1. Never push to the default branch. Never merge a PR.
+113:Ship branch: bare-a1
+114:The task is complete only when committed on your branch.
+152:That CI-ready `done:` is accepted only when this copy's HEAD - your latest commit - is one the /no-mistakes run pushed, so commit nothing after the run; the check tests that commit, not merely that a branch moved.
+
+=== S3 fm-brief.sh with explicit --branch-prefix fm/ ===
+scaffolded: /tmp/fmlab.JUWv/home/data/fmx-a2/brief.md (ship, mode=no-mistakes; replace {TASK} and {FIRSTMATE_SPEC})
+16:You are in a disposable git worktree of fmproj, at a detached HEAD on a clean default branch.
+20:If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append `blocked [at=<epoch>]: launched in primary checkout, not an isolated worktree` to the status file and stop.
+22:1. First action: create your branch: `git checkout -b fm/fmx-a2 --`
+26:1. Never push to the default branch. Never merge a PR.
+=== S1b stdout only (stderr dropped) ===
+unknownproj stdout=[]
+absent-registry stdout=[]
+--- registry parser does not load fm-dod-lib stack ---
++ . /Users/jacyanderson/.no-mistakes/worktrees/f75ba0a84ab1/01M3NK6W31BHYTSG1MFACPG4Z3/bin/fm-branch-prefix-lib.sh

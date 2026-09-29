@@ -1,0 +1,27 @@
+=== S4 fm-promote.sh without --branch-prefix (scout -> ship) ===
+exit=0
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+promoted promo-a3 to ship mode=direct-PR yolo=off (teardown protection restored)
+wrote ship instructions for mode=direct-PR: /tmp/fmlab.JUWv/home/data/promo-a3/ship-instructions.md
+next: FM_HOME=/tmp/fmlab.JUWv/home bin/fm-send.sh fm-promo-a3 "$(cat /tmp/fmlab.JUWv/home/data/promo-a3/ship-instructions.md)"
+--- recorded meta ---
+window=fm-promo-a3
+worktree=/tmp/wt
+project=plainproj
+kind=ship
+mode=direct-PR
+yolo=off
+branch=promo-a3
+--- ship-instructions branch lines ---
+11:3. Return to a clean default-branch base, then create your branch: `git checkout -b promo-a3 --`.
+30:Ship branch: promo-a3
+
+=== S4b fm-promote.sh with --branch-prefix fix/ ===
+exit=0
+branch=fix/promo-a4

@@ -1,0 +1,13 @@
+## 1. brief + spawn with NO --branch-prefix, project registers branch=fix/
+error: no-mistakes gate agent must not drive the fleet (NO_MISTAKES_GATE set)
+
+## 2. brief + spawn with --branch-prefix fix/ matching the registry (expect no deviation notice)
+deviation notices: 0
+
+## 3. adversarial: bare-default brief but spawn passes --branch-prefix fm/ (expect refusal, no meta)
+error: no-mistakes gate agent must not drive the fleet (NO_MISTAKES_GATE set)
+meta: ls: /tmp/fmspawn.xgol/home/state/sp-a3.meta: No such file or directory
+
+## 4. project with NO registered prefix + default brief/spawn (expect quiet)
+deviation notices: 0
+error: no-mistakes gate agent must not drive the fleet (NO_MISTAKES_GATE set)
