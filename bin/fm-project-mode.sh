@@ -109,8 +109,8 @@ case "${1:-}" in
   --branch-prefix) BRANCH_PREFIX_QUERY=1; shift ;;
   --forge) WANT_FORGE=1; shift ;;
 esac
-# shellcheck source=bin/fm-dod-lib.sh
-. "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-branch-prefix-lib.sh
+. "$SCRIPT_DIR/fm-branch-prefix-lib.sh"
 NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge] <project-name>}
 
 if [ ! -f "$REG" ]; then

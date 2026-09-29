@@ -32,8 +32,8 @@
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
 #   --branch-prefix is the optional prefix selected at intake for this ship's
-#   immutable branch, defaulting to a bare "<task-id>" (bin/fm-dod-lib.sh owns
-#   FM_DEFAULT_BRANCH_PREFIX). It must agree with the branch recorded
+#   immutable branch, defaulting to a bare "<task-id>" (bin/fm-branch-prefix-lib.sh
+#   owns FM_DEFAULT_BRANCH_PREFIX). It must agree with the branch recorded
 #   in the brief, and is refused on scouts, secondmates, and relaunches. When the
 #   selected branch does not match the project's registered prefix, the spawn
 #   prints a one-line deviation notice and continues, because the registered
@@ -621,6 +621,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-branch-prefix-lib.sh
+. "$SCRIPT_DIR/fm-branch-prefix-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
@@ -3191,13 +3193,13 @@ if [ "$KIND" = ship ]; then
     echo "notice: $ID ships mode=$MODE while the standing posture for $PROJ_NAME is $STANDING_MODE - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state" >&2
   fi
   # The registered ship-branch prefix (bin/fm-project-mode.sh) is the captain's
-  # answer to "should this project's branches read as firstmate-authored", so a
+  # standing naming for this project's ship branches, so a
   # spawn that ships a branch other than the registered prefix is
   # announced, not refused: the brief-vs-spawn agreement above already
   # guarantees the worker's instructions match the branch this spawn selected.
   STANDING_BRANCH=$("$FM_ROOT/bin/fm-project-mode.sh" --branch-prefix "$PROJ_NAME" 2>/dev/null) || STANDING_BRANCH=
   if [ "$BRANCH" != "$STANDING_BRANCH$ID" ]; then
-    echo "notice: $ID ships branch=$BRANCH while $PROJ_NAME registers the ship-branch prefix '$STANDING_BRANCH' (branch $STANDING_BRANCH$ID) - the task's branch and PR will read as firstmate-authored; proceed only on a current explicit captain instruction or an intake judgment you can state" >&2
+    echo "notice: $ID ships branch=$BRANCH while $PROJ_NAME registers the ship-branch prefix '$STANDING_BRANCH' (branch $STANDING_BRANCH$ID) - the task's branch will not follow the project's registered naming; proceed only on a current explicit captain instruction or an intake judgment you can state" >&2
   fi
 fi
 

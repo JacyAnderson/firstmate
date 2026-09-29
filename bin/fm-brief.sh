@@ -49,7 +49,7 @@
 # the three concrete modes at intake before calling this script.
 # --branch-prefix <prefix> optionally prefixes the ship branch, so the resolved
 # branch is "<prefix><task-id>" instead of the default bare "<task-id>" (the empty
-# FM_DEFAULT_BRANCH_PREFIX owned by bin/fm-dod-lib.sh). Pass a prefix such as
+# FM_DEFAULT_BRANCH_PREFIX owned by bin/fm-branch-prefix-lib.sh). Pass a prefix such as
 # "fm/" or "fix/" when a project registers one; a bare branch keeps an
 # "fm/"-branded branch or PR away from collaborators who do not use this tooling.
 # Like --mode, this script never reads data/projects.md for it: the
@@ -145,6 +145,8 @@ esac
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-branch-prefix-lib.sh
+. "$SCRIPT_DIR/fm-branch-prefix-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.

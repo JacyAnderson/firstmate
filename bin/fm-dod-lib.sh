@@ -14,9 +14,6 @@
 # registered prefix, such as `fm/`, may precede the task id); it defaults to
 # `$FM_DEFAULT_BRANCH_PREFIX<task-id>`, a bare `<task-id>`, and is the immutable
 # task branch rendered in every delivery contract.
-# FM_DEFAULT_BRANCH_PREFIX is the one ship-branch prefix default, read by
-# bin/fm-brief.sh, bin/fm-spawn.sh, bin/fm-promote.sh, and the registry parser
-# bin/fm-project-mode.sh.
 # Callers of the gate are bin/fm-crew-state.sh (current-state done),
 # bin/fm-pr-check.sh (PR registration), and bin/fm-inactive-reconcile.sh
 # (secondmate ledger-first publish of a child done). A ship `done:` is not
@@ -100,8 +97,8 @@
 # It takes the same optional trailing forge argument, because the rule that keeps
 # a worker off a remote is exactly the rule that changes when the forge does.
 
-FM_DEFAULT_BRANCH_PREFIX=
-
+# shellcheck source=bin/fm-branch-prefix-lib.sh
+. "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-branch-prefix-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-pr-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh

@@ -1399,8 +1399,8 @@ EOF
   pass "fm-spawn: the brief must carry the spawn's selected ship branch, and the selection is validated before anything is created"
 }
 
-# The registered ship-branch prefix exists so a third-party project's branches and
-# PRs do not read as firstmate-authored, but a spawn that deviates from it breaks
+# The registered ship-branch prefix is the captain's standing naming for a
+# project's ship branches, but a spawn that deviates from it breaks
 # no contract: the brief-vs-spawn agreement above already guarantees the worker's
 # instructions match the branch this spawn selected. So the deviation is announced
 # and the spawn proceeds, while matching the registry (or its bare default) stays
@@ -1416,7 +1416,7 @@ EOF
   out=$(run_spawn "$home" "$fakebin" prefix-dev-a1 "$proj" claude --mode no-mistakes --yolo off)
   assert_contains "$out" "ships branch=prefix-dev-a1 while proj registers the ship-branch prefix 'fix/'" \
     "no deviation notice for shipping the default branch past a registered override"
-  assert_contains "$out" "will read as firstmate-authored" \
+  assert_contains "$out" "will not follow the project's registered naming" \
     "the deviation notice did not name the cost of the drift"
 
   FM_HOME="$home" "$BRIEF" prefix-dev-a2 proj --mode no-mistakes --branch-prefix fix/ >/dev/null \
