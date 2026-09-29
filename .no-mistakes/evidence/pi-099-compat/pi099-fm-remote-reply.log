@@ -1,0 +1,33 @@
+ok - a blocking non-destructive remote delta reaches durable process-event capture
+ok - a captured delta is applied, acknowledged, and re-armed without a handler
+ok - ingest appends one validated line, fetches its document, and advances the cursor
+ok - replayed capture has one deduplicated append and one durable handling identity
+ok - later generations cannot invalidate an unacknowledged ingested result
+ok - the remote status and decision model mirrors and the cursor advances
+ok - a remote mate's new decision folds open exactly as a local mate's does
+ok - a replayed mirrored delta is idempotent in both the stream and the cursor
+ok - transported control bytes are normalized in place and never stop the stream
+ok - payload protocol-field names cannot collide with transport metadata
+ok - NUL bytes are normalized in place before shell line processing
+ok - local document storage failures remain retryable until delivery succeeds
+ok - a structured pointer must end at its token boundary
+ok - adjacent pointers are fetched while malformed tokens remain unchanged
+ok - a rejected candidate never gives the following text a false leading boundary
+ok - nested remote reports relay while an undeliverable foreign pointer fails open
+ok - the reported incident raises no standing decision and still delivers the report
+ok - an undeliverable structured offer fails open with one note and never a decision
+ok - a remote refusal surfaces its own reason without opening a decision
+ok - a failed pointer extraction never commits a partial delta
+ok - a failed mirror write never drops status content or advances the cursor
+ok - source-line identity survives commit failure and cursor-loss recapture
+ok - a mirrored reserved-key line cannot squat or clear the parent's own decision
+ok - a reply that arrives after escalation resolves it and clears the open decision
+ok - a remote reply listener stays owned across empty waits and a delta
+ok - a failed remote read exits instead of relistening
+ok - persistent ingestion failure leaves exactly one durable capture
+ok - a preempted reply poll cannot publish channel freshness
+ok - a quiet reply window publishes the caught-up watermark the reply guard reads
+ok - a cursor-loss whole-log recapture is acknowledged quietly with no duplicate wake
+ok - truncation is detected, escalated once, and not silently rebased
+ok - remote reply retirement quiesces and refuses unhandled captured results
+ALL TESTS PASSED
