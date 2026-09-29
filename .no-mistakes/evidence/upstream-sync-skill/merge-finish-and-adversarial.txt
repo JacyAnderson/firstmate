@@ -1,0 +1,36 @@
+## resolve (lab: take fork side) and finish with git commit --no-edit
+commit exit=0
+subject: Merge upstream firstmate 260c4f08 into the fork
+parents: ec2b919c0441185337e0ad41e77b8ae3f81fca67 260c4f089449c33f08c31df714ca9cfe2a25b50a
+second parent == upstream/main: yes
+
+## fork refs after merge (unchanged, nothing pushed)
+f68b4f8c802a91c07e13442aa5fa069b42fb2d1f commit	refs/heads/fm/fix-spawn-timeout
+ec2b919c0441185337e0ad41e77b8ae3f81fca67 commit	refs/heads/main
+4e5c8c855de0cdc10c292d488baf081012cae437 commit	refs/heads/upstream-sync
+1f7db9cb85b5ea46b8dcbc4e527b5971f7fac6f8 commit	refs/heads/upstream-sync-2
+b9ff315dd2ee7fe7a3fd080a0c6acedbe0feef93 commit	refs/heads/upstream-sync-skill
+
+## rerun merge on the finished branch
+$ bin/fm-upstream-sync.sh merge
+summary: current
+exit=0
+
+## refusal: HEAD missing fork tip
+$ bin/fm-upstream-sync.sh merge
+fm-upstream-sync: HEAD does not contain origin/main; start the sync branch from the fork tip
+exit=2
+
+## adversarial: pushInsteadOf rewrites the DISABLED-less https upstream into a pushable ssh URL
+git@github.com:kunchenguid/firstmate
+upstream-push: ENABLED git@github.com:kunchenguid/firstmate
+## explicit credentialed pushurl is reported ENABLED and redacted
+upstream-push: ENABLED https://github.com/kunchenguid/firstmate
+upstream-push: disabled DISABLED
+
+## adversarial: diff.noprefix=true + color.ui=always do not garble the fm-prefix scan
+fm-prefix: AGENTS.md +1
+fm-prefix: README.md +1
+fm-prefix: bin/fm-bearings-snapshot.sh +2
+fm-prefix: bin/fm-brief.sh +5
+fm-prefix: bin/fm-dod-lib.sh +1

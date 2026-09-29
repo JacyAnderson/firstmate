@@ -1,0 +1,81 @@
+## refusals (on main, dirty, detached)
+main
+$ bin/fm-upstream-sync.sh merge
+fm-upstream-sync: refusing to merge on the fork's default branch 'main'
+exit=2
+$ bin/fm-upstream-sync.sh merge
+fm-upstream-sync: tracked changes present; commit or move them aside first
+exit=2
+$ bin/fm-upstream-sync.sh merge
+fm-upstream-sync: HEAD is detached; pass --branch <name> or check out a sync branch
+exit=2
+$ bin/fm-upstream-sync.sh merge --branch main
+fm-upstream-sync: refusing to merge on the fork's default branch 'main'
+exit=2
+
+## fork refs before merge
+f68b4f8c802a91c07e13442aa5fa069b42fb2d1f commit	refs/heads/fm/fix-spawn-timeout
+ec2b919c0441185337e0ad41e77b8ae3f81fca67 commit	refs/heads/main
+4e5c8c855de0cdc10c292d488baf081012cae437 commit	refs/heads/upstream-sync
+1f7db9cb85b5ea46b8dcbc4e527b5971f7fac6f8 commit	refs/heads/upstream-sync-2
+b9ff315dd2ee7fe7a3fd080a0c6acedbe0feef93 commit	refs/heads/upstream-sync-skill
+
+## merge --branch upstream-sync-lab
+$ bin/fm-upstream-sync.sh merge --branch upstream-sync-lab
+branch: upstream-sync-lab
+upstream: upstream/main 260c4f089449c33f08c31df714ca9cfe2a25b50a
+merge-base: f5735dc28a83186ef95715c8683333245762a8c6
+conflict: AGENTS.md (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh; port fork lines from sections upstream moved into skills into the owning skill)
+conflict: bin/fm-bearings-snapshot.sh (hotspot: a record without branch= uses the bare <id> branch when it exists, else fm/<id>)
+conflict: bin/fm-brief.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh; repo-text rule 8 renders after upstream's rule 7)
+conflict: bin/fm-dod-lib.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh; rule 8 PR-description steps sit in fm_dod_block's direct-PR and no-mistakes cases)
+conflict: bin/fm-merge-local.sh (hotspot: a record without branch= uses the bare <id> branch when it exists, else fm/<id>)
+conflict: bin/fm-pr-check.sh (hotspot: pr-comments review-comment wakes (GitHub and GitLab only))
+conflict: bin/fm-pr-poll.sh (hotspot: pr-comments review-comment wakes (GitHub and GitLab only))
+conflict: bin/fm-promote.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh)
+conflict: bin/fm-review-diff.sh (hotspot: a record without branch= uses the bare <id> branch when it exists, else fm/<id>)
+conflict: bin/fm-test-run.sh (hotspot: test family lists: keep both sides' entries)
+conflict: docs/architecture.md (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh)
+conflict: docs/captain-hold-lifecycle.md (hotspot: Done-archive lookup for answered captain calls)
+conflict: docs/scripts.md (hotspot: keep the fork's rows (fm-text-check.sh, fm-upstream-sync.sh, review-comment poll))
+conflict: tests/fm-bearings-snapshot.test.sh
+conflict: tests/fm-brief.test.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh)
+conflict: tests/fm-review-diff.test.sh
+conflict: tests/fm-task-delivery.test.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh)
+review: .agents/skills/firstmate-coding-guidelines/SKILL.md
+review: .github/workflows/ci.yml (hotspot: Bearings test count is upstream's plus the fork's)
+review: README.md (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh)
+review: bin/fm-spawn.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh; FM_SPAWN_WORKTREE_TIMEOUT and the branchless-record relaunch fallback)
+review: bin/fm-teardown.sh
+review: bin/fm-watch.sh
+review: docs/configuration.md
+review: docs/documentation-audiences.json
+review: tests/fm-captain-hold-lifecycle.test.sh
+review: tests/fm-control-relaunch.test.sh (hotspot: branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh)
+review: tests/fm-pr-check-security.test.sh
+review: tests/fm-spawn-worktree-settle.test.sh
+fm-prefix: AGENTS.md +1
+fm-prefix: README.md +1
+fm-prefix: bin/fm-bearings-snapshot.sh +2
+fm-prefix: bin/fm-brief.sh +5
+fm-prefix: bin/fm-dod-lib.sh +1
+fm-prefix: bin/fm-merge-local.sh +2
+fm-prefix: bin/fm-project-mode.sh +13
+fm-prefix: bin/fm-promote.sh +1
+fm-prefix: bin/fm-review-diff.sh +2
+fm-prefix: bin/fm-spawn.sh +5
+fm-prefix: docs/architecture.md +2
+fm-prefix: tests/fm-brief.test.sh +13
+fm-prefix: tests/fm-crew-state.test.sh +42
+fm-prefix: tests/fm-dod-lib.test.sh +26
+fm-prefix: tests/fm-fleet-ledger.test.sh +1
+fm-prefix: tests/fm-pr-check-security.test.sh +5
+fm-prefix: tests/fm-review-diff.test.sh +2
+fm-prefix: tests/fm-supervision-host-attended-live-e2e.test.sh +36
+fm-prefix: tests/fm-task-delivery.test.sh +12
+fm-prefix: tests/fm-teardown.test.sh +2
+summary: conflicts=17
+exit=1
+current branch: upstream-sync-lab
+MERGE_HEAD: 260c4f089449c33f08c31df714ca9cfe2a25b50a  upstream/main: 260c4f089449c33f08c31df714ca9cfe2a25b50a
+unmerged in index:       17
