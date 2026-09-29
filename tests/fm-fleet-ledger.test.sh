@@ -41,7 +41,7 @@ make_case() {  # <name> <on|off>
   printf '%s\n' "$$" > "$HOME_DIR/state/.lock"
   touch "$HOME_DIR/state/.last-watcher-beat"
   [ "$2" = off ] || : > "$HOME_DIR/config/fleet-ledger"
-  fm_git_worktree "$PROJ_DIR" "$WT_DIR" "fm/$TASK"
+  fm_git_worktree "$PROJ_DIR" "$WT_DIR" "$TASK"
   cat > "$HOME_DIR/data/$TASK/brief.md" <<EOF
 # Task
 ## Captain's intent
