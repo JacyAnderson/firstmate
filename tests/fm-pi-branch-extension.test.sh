@@ -5120,6 +5120,26 @@ if (JSON.stringify(expandedActual) !== JSON.stringify(expandedStock)) {
 if (!expandedStock.join("\n").includes("OUTCOME_TWELVE") || JSON.stringify(expandedStock) === JSON.stringify(collapsedStock)) {
   throw new Error("stock rendering fixture did not exercise expanded output");
 }
+const processedDefinition = tools.find((tool) => tool.name === "fm_branch_processed");
+if (!processedDefinition) throw new Error("fm_branch_processed was not registered");
+const stockProcessedDefinition = { ...processedDefinition };
+delete stockProcessedDefinition.renderShell;
+delete stockProcessedDefinition.renderCall;
+delete stockProcessedDefinition.renderResult;
+const processedResult = { content: [{ type: "text", text: "acknowledged through seq 7" }], details: undefined, isError: false };
+for (const expanded of [false, true]) {
+  const [stockProcessed, actualProcessed] = [stockProcessedDefinition, processedDefinition].map((definition, index) => {
+    const row = new ToolExecutionComponent("fm_branch_processed", `processed-${index}`, { through: 7 }, { showImages: false }, definition, ui, process.cwd());
+    row.markExecutionStarted();
+    row.setArgsComplete();
+    row.updateResult(processedResult);
+    row.setExpanded(expanded);
+    return row.render(100);
+  });
+  if (JSON.stringify(actualProcessed) !== JSON.stringify(stockProcessed)) {
+    throw new Error(`${expanded ? "expanded" : "collapsed"} Calm-off fm_branch_processed rendering differs from Pi stock`);
+  }
+}
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: false });
 actualRow.invalidate();
 if (actualRow.render(100).length !== 0) {
