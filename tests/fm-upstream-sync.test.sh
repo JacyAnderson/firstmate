@@ -130,6 +130,21 @@ test_status_flags_enabled_upstream_push() {
   pass "status flags an upstream remote that can be pushed to"
 }
 
+test_status_flags_alternate_upstream_push_url() {
+  local w
+  w=$(new_world altpush)
+  git -C "$w/work" remote set-url --push upstream git@github.com:example/firstmate.git
+  run_sync "$w" status
+  expect_code 0 "$RC" "status with an alternate upstream push URL"
+  assert_contains "$OUT" "upstream-push: ENABLED git@github.com:example/firstmate.git" "an explicit alternate push URL is flagged"
+  git -C "$w/work" config --unset remote.upstream.pushurl
+  git -C "$w/work" config "url.file://$w/.insteadOf" "$w/"
+  git -C "$w/work" config "url.file://$w/.pushInsteadOf" "$w/"
+  run_sync "$w" status
+  assert_contains "$OUT" "upstream-push: ENABLED file://$w/upstream.git" "a pushInsteadOf rewrite is flagged"
+  pass "status flags an upstream push URL that differs from the fetch URL"
+}
+
 test_status_fails_without_upstream_remote() {
   local w
   w=$(new_world noremote)
@@ -188,6 +203,23 @@ test_merge_clean_creates_real_merge_and_never_pushes() {
   pass "merge makes a real merge commit on a sync branch and pushes nothing"
 }
 
+test_merge_failure_removes_created_branch() {
+  local w
+  w=$(new_world blocked)
+  upstream_commit "$w" added.md "upstream added" "upstream adds a file"
+  printf 'local\n' > "$w/work/added.md"
+  run_sync "$w" merge --branch upstream-sync
+  expect_code 2 "$RC" "merge blocked by an untracked file"
+  assert_contains "$OUT" "without leaving a merge" "the failed merge is explained"
+  assert_equals "main" "$(git -C "$w/work" symbolic-ref --short HEAD)" "a failed merge returns to the starting branch"
+  assert_equals "" "$(git -C "$w/work" branch --list upstream-sync)" "a failed merge deletes the branch it created"
+  rm "$w/work/added.md"
+  run_sync "$w" merge --branch upstream-sync
+  expect_code 0 "$RC" "retrying with the same --branch"
+  assert_contains "$OUT" "summary: clean" "the retry merges"
+  pass "merge --branch cleans up the branch when git merge fails outright"
+}
+
 test_merge_conflict_left_for_resolution() {
   local w
   w=$(new_world conflict)
@@ -208,9 +240,11 @@ test_status_current
 test_status_reports_without_touching_the_checkout
 test_status_hotspot_and_review
 test_status_flags_enabled_upstream_push
+test_status_flags_alternate_upstream_push_url
 test_status_fails_without_upstream_remote
 test_merge_refusals
 test_merge_clean_creates_real_merge_and_never_pushes
+test_merge_failure_removes_created_branch
 test_merge_conflict_left_for_resolution
 
 echo "# all fm-upstream-sync tests passed"

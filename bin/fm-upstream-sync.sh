@@ -26,13 +26,16 @@
 # superseded or silently undone. fm-prefix lines count upstream-added lines
 # naming an fm/ branch, because upstream defaults ship branches to fm/<id>
 # while the fork's default is the bare <id> (FM_DEFAULT_BRANCH_PREFIX in
-# bin/fm-branch-prefix-lib.sh). upstream-push reads ENABLED when the upstream
-# remote's push URL is its fetch URL, so a stray push could reach upstream.
+# bin/fm-branch-prefix-lib.sh). upstream-push reads disabled only when the
+# upstream remote's effective push URL (after pushInsteadOf) cannot name a
+# remote: no scheme://, no scp-style [user@]host:path, and no existing local
+# path, like the DISABLED placeholder. Anything else reads ENABLED.
 #
 # merge [--branch <name>] fetches, then merges the upstream tip into the
 # current branch with a real merge commit whose second parent is that tip, so
 # upstream's history stays in the fork and the next sync starts from it.
-# --branch first creates <name> at the fork tip. It refuses on the fork's
+# --branch first creates <name> at the fork tip, and deletes it again if git
+# merge fails without leaving a merge to resolve. It refuses on the fork's
 # default branch, on a detached HEAD without --branch, with tracked changes,
 # during an unfinished merge, and when HEAD does not contain the fork tip.
 # Exit 0: already current, or merged without conflicts and committed.
@@ -61,6 +64,15 @@ FORK_REF="refs/remotes/$FORK_REMOTE/$FORK_BRANCH"
 usage() { echo "usage: fm-upstream-sync.sh [status | merge [--branch <name>]] [--help]" >&2; }
 die() { echo "fm-upstream-sync: $*" >&2; exit 2; }
 g() { git -C "$REPO" "$@"; }
+
+push_url_usable() {  # <url>
+  case "$1" in *://*) return 0 ;; esac
+  case "${1%%/*}" in *:*) return 0 ;; esac
+  case "$1" in
+    /*) [ -e "$1" ] ;;
+    *) [ -e "$REPO/$1" ] ;;
+  esac
+}
 
 hotspot_note() {
   local notes=""
@@ -134,21 +146,20 @@ report_details() {  # <base> <fork-side-ref> <conflicts>
 }
 
 cmd_status() {
-  local up fork base behind ahead push_url fetch_url tree_out rc conflicts n
+  local up fork base behind ahead push_url tree_out rc conflicts n
   fetch_remotes
   up=$(g rev-parse "$UP_REF")
   fork=$(g rev-parse "$FORK_REF")
   base=$(g merge-base "$FORK_REF" "$UP_REF") || die "the fork and upstream share no history"
   behind=$(g rev-list --count "$FORK_REF..$UP_REF")
   ahead=$(g rev-list --count "$UP_REF..$FORK_REF")
-  fetch_url=$(g remote get-url "$UP_REMOTE")
   push_url=$(g remote get-url --push "$UP_REMOTE")
   printf 'upstream: %s/%s %s\n' "$UP_REMOTE" "$UP_BRANCH" "$up"
   printf 'fork: %s/%s %s\n' "$FORK_REMOTE" "$FORK_BRANCH" "$fork"
   printf 'merge-base: %s\n' "$base"
   printf 'behind: %s\n' "$behind"
   printf 'ahead: %s\n' "$ahead"
-  if [ "$push_url" = "$fetch_url" ]; then
+  if push_url_usable "$push_url"; then
     printf 'upstream-push: ENABLED %s\n' "$push_url"
   else
     printf 'upstream-push: disabled %s\n' "$push_url"
@@ -174,7 +185,7 @@ cmd_status() {
 }
 
 cmd_merge() {
-  local branch="" current target up base conflicts n
+  local branch="" current start target up base conflicts n
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch)
@@ -206,6 +217,7 @@ cmd_merge() {
     return 0
   fi
   if [ -n "$branch" ]; then
+    start=${current:-$(g rev-parse HEAD)}
     g checkout --quiet -b "$branch" "$FORK_REF" -- || die "could not create branch '$branch'"
     current=$branch
   fi
@@ -218,7 +230,12 @@ cmd_merge() {
     echo "summary: clean"
     return 0
   fi
-  g rev-parse --verify --quiet MERGE_HEAD >/dev/null || die "git merge failed without leaving a merge to resolve"
+  if ! g rev-parse --verify --quiet MERGE_HEAD >/dev/null; then
+    if [ -n "$branch" ]; then
+      { g checkout --quiet "$start" -- && g branch --quiet -D "$branch"; } || true
+    fi
+    die "git merge failed without leaving a merge to resolve"
+  fi
   conflicts=$(g diff --name-only --diff-filter=U)
   report_details "$base" "HEAD" "$conflicts"
   n=$(printf '%s\n' "$conflicts" | grep -c . || true)
