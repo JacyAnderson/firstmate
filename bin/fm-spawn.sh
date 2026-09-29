@@ -32,7 +32,8 @@
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
 #   --branch-prefix is the optional prefix selected at intake for this ship's
-#   immutable branch, defaulting to "fm/". It must agree with the branch recorded
+#   immutable branch, defaulting to a bare "<task-id>" (bin/fm-dod-lib.sh owns
+#   FM_DEFAULT_BRANCH_PREFIX). It must agree with the branch recorded
 #   in the brief, and is refused on scouts, secondmates, and relaunches. When the
 #   selected branch does not match the project's registered prefix, the spawn
 #   prints a one-line deviation notice and continues, because the registered
@@ -642,7 +643,7 @@ EFFORT=
 BACKEND_ARG=
 MODE=
 YOLO=
-BRANCH_PREFIX=fm/
+BRANCH_PREFIX=$FM_DEFAULT_BRANCH_PREFIX
 TRACEPARENT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
@@ -3140,7 +3141,7 @@ if [ "$KIND" = ship ]; then
       echo "error: branch mismatch for $ID: the brief says branch=$BRIEF_BRANCH but this spawn selected branch=$BRANCH" >&2
       exit 1
     }
-  elif [ "$BRANCH" != "fm/$ID" ]; then
+  elif [ "$BRANCH" != "$FM_DEFAULT_BRANCH_PREFIX$ID" ]; then
     # A relaunch's branch comes from the meta record (--branch-prefix is refused
     # there), so a promoted scout whose brief never carried a Ship branch line
     # must relaunch on that recorded branch rather than be refused.
@@ -3151,7 +3152,7 @@ if [ "$KIND" = ship ]; then
       exit 1
     fi
   else
-    echo "warning: $BRIEF records no ship branch; defaulting to legacy branch $BRANCH" >&2
+    echo "warning: $BRIEF records no ship branch; defaulting to branch $BRANCH" >&2
   fi
   if [ -z "$BRIEF_MODE" ]; then
     echo "warning: $BRIEF records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode $MODE - confirm its definition of done matches" >&2
@@ -3191,7 +3192,7 @@ if [ "$KIND" = ship ]; then
   fi
   # The registered ship-branch prefix (bin/fm-project-mode.sh) is the captain's
   # answer to "should this project's branches read as firstmate-authored", so a
-  # spawn that ships the legacy fm/ prefix past a registered override is
+  # spawn that ships a branch other than the registered prefix is
   # announced, not refused: the brief-vs-spawn agreement above already
   # guarantees the worker's instructions match the branch this spawn selected.
   STANDING_BRANCH=$("$FM_ROOT/bin/fm-project-mode.sh" --branch-prefix "$PROJ_NAME" 2>/dev/null) || STANDING_BRANCH=

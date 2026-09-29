@@ -11,8 +11,12 @@
 # mode; an unknown mode is refused rather than silently rendered as the pipeline
 # contract.
 # The optional third argument is the task's full ship-branch name (a project's
-# registered prefix may replace the legacy `fm/` one); it defaults to `fm/<task-id>`
-# and is the immutable task branch rendered in every delivery contract.
+# registered prefix, such as `fm/`, may precede the task id); it defaults to
+# `$FM_DEFAULT_BRANCH_PREFIX<task-id>`, a bare `<task-id>`, and is the immutable
+# task branch rendered in every delivery contract.
+# FM_DEFAULT_BRANCH_PREFIX is the one ship-branch prefix default, read by
+# bin/fm-brief.sh, bin/fm-spawn.sh, bin/fm-promote.sh, and the registry parser
+# bin/fm-project-mode.sh.
 # Callers of the gate are bin/fm-crew-state.sh (current-state done),
 # bin/fm-pr-check.sh (PR registration), and bin/fm-inactive-reconcile.sh
 # (secondmate ledger-first publish of a child done). A ship `done:` is not
@@ -96,6 +100,8 @@
 # It takes the same optional trailing forge argument, because the rule that keeps
 # a worker off a remote is exactly the rule that changes when the forge does.
 
+FM_DEFAULT_BRANCH_PREFIX=
+
 # shellcheck source=bin/fm-pr-lib.sh
 . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-pr-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
@@ -142,7 +148,7 @@ fm_forge_valid_for_mode() {  # <forge> <mode> <caller>
 
 fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id> [branch] [<forge>]
   local mode=$1 id=$2 forge=${4:-none}
-  local branch=${3:-fm/$id}
+  local branch=${3:-$FM_DEFAULT_BRANCH_PREFIX$id}
   fm_forge_valid_for_mode "$forge" "$mode" fm_ship_rule_one || return 1
   if [ "$forge" = gerrit ]; then
     printf '%s\n' "1. Never push with git and never create a change except through the one \`gerrit-axi publish --squash\` your Definition of done names. Never run \`gerrit-axi submit\`, never vote or review a change by any path, including \`gerrit review\` or a label option on a push, and never abandon one: a human reviewer approves and submits it on the server."
@@ -340,7 +346,7 @@ EOF
 
 fm_dod_block() {  # <mode> <task-id> [branch] [<forge>]
   local mode=$1 id=$2 forge=${4:-none}
-  local branch=${3:-fm/$id}
+  local branch=${3:-$FM_DEFAULT_BRANCH_PREFIX$id}
   fm_forge_valid_for_mode "$forge" "$mode" fm_dod_block || return 1
   case "$mode:$forge" in
     direct-PR:gerrit)

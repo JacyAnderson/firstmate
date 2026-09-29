@@ -1277,9 +1277,9 @@ test_home_brief_include_is_appended_last() {
 }
 
 # (a) An unregistered/default project - no --branch-prefix passed at all - must
-# keep every generated ship mode's branch on the legacy "fm/<task-id>" name, byte
-# for byte, so every existing firstmate installation is unaffected.
-test_ship_branch_prefix_defaults_to_legacy_fm() {
+# put every generated ship mode's branch on the bare "<task-id>" name, agreeing
+# with bin/fm-project-mode.sh's registry default.
+test_ship_branch_prefix_defaults_to_bare_id() {
   local home id mode brief
   home="$TMP_ROOT/branch-prefix-default-home"
   mkdir -p "$home/data"
@@ -1289,10 +1289,10 @@ test_ship_branch_prefix_defaults_to_legacy_fm() {
     FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1
     brief="$home/data/$id/brief.md"
     # shellcheck disable=SC2016  # literal backticks around the branch name must stay unexpanded
-    assert_grep "\`git checkout -b fm/$id --\`" "$brief" \
-      "$mode: omitting --branch-prefix must still create the legacy fm/<task-id> branch"
+    assert_grep "\`git checkout -b $id --\`" "$brief" \
+      "$mode: omitting --branch-prefix must create the bare <task-id> branch"
   done
-  pass "fm-brief.sh: --branch-prefix omitted defaults every ship mode to fm/<task-id>"
+  pass "fm-brief.sh: --branch-prefix omitted defaults every ship mode to <task-id>"
 }
 
 # (b) + (c) A configured override must replace "fm/" everywhere the branch name is
@@ -1526,7 +1526,7 @@ test_intake_default_prefix_gives_bare_branch
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor
 test_home_brief_include_is_appended_last
-test_ship_branch_prefix_defaults_to_legacy_fm
+test_ship_branch_prefix_defaults_to_bare_id
 test_ship_branch_prefix_override_is_consistent_across_modes
 test_ship_branch_prefix_empty_override_yields_bare_task_id
 test_branch_prefix_is_refused_where_it_does_not_apply

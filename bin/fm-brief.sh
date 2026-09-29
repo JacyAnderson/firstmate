@@ -47,13 +47,12 @@
 #                the configured merge authority approves, firstmate merges to local main
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
-# --branch-prefix <prefix> optionally overrides the ship branch's "fm/" prefix, so
-# the resolved branch is "<prefix><task-id>" instead of the default "fm/<task-id>".
-# Pass an empty prefix ("--branch-prefix ''") for a bare "<task-id>" branch, or a
-# conventional prefix such as "fix/" - useful for a third-party project that does
-# not use this tooling and should not see an "fm/"-branded branch or PR. Defaults
-# to "fm/" when omitted, so every existing installation's branch names are
-# unchanged. Like --mode, this script never reads data/projects.md for it: the
+# --branch-prefix <prefix> optionally prefixes the ship branch, so the resolved
+# branch is "<prefix><task-id>" instead of the default bare "<task-id>" (the empty
+# FM_DEFAULT_BRANCH_PREFIX owned by bin/fm-dod-lib.sh). Pass a prefix such as
+# "fm/" or "fix/" when a project registers one; a bare branch keeps an
+# "fm/"-branded branch or PR away from collaborators who do not use this tooling.
+# Like --mode, this script never reads data/projects.md for it: the
 # registry's optional "branch=<prefix>" annotation (bin/fm-project-mode.sh's
 # header owns that format and its --branch-prefix query) is the captain's
 # standing per-project preference, and firstmate resolves it per task at intake
@@ -189,7 +188,7 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
-BRANCH_PREFIX=fm/
+BRANCH_PREFIX=$FM_DEFAULT_BRANCH_PREFIX
 BRANCH_PREFIX_SET=0
 FORGE=none
 FORGE_SET=0

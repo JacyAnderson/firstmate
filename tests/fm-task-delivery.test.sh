@@ -349,7 +349,7 @@ STUB
       "$mode: promoted worker was not told to verify its repository root"
     assert_grep "If either does not resolve to the worktree you were launched in, stop and escalate to firstmate" "$payload" \
       "$mode: promoted worker was not told to stop for any wrong worktree"
-    assert_grep "git checkout -b fm/$id --" "$payload" \
+    assert_grep "git checkout -b $id --" "$payload" \
       "$mode: promoted worker was not told to leave the scratch base for its ship branch"
     assert_grep "## Captain's intent" "$payload" \
       "$mode: promoted worker did not receive the Captain's intent subsection"
@@ -1337,7 +1337,7 @@ EOF
 # would create can be caught: the worktree, the record, review-diff, and the
 # local merge all inherit the recorded name. A mismatch is refused before any
 # record exists, and a brief from before briefs recorded a ship branch is only
-# acceptable on the legacy default, which warns.
+# acceptable on the default bare branch, which warns.
 test_spawn_requires_the_brief_to_carry_the_selected_branch() {
   local rec home proj fakebin out status
   rec=$(make_home branch-agree "- proj [no-mistakes] - fixture (added 2026-01-01)")
@@ -1366,9 +1366,9 @@ EOF
 
   write_brief "$home" branch-agree-a3 no-mistakes
   out=$(run_spawn "$home" "$fakebin" branch-agree-a3 "$proj" claude --mode no-mistakes --yolo off)
-  assert_contains "$out" "records no ship branch; defaulting to legacy branch fm/branch-agree-a3" \
-    "the legacy default did not warn about the brief's missing ship branch"
-  assert_not_contains "$out" "branch mismatch" "the legacy default was refused as drift"
+  assert_contains "$out" "records no ship branch; defaulting to branch branch-agree-a3" \
+    "the default branch did not warn about the brief's missing ship branch"
+  assert_not_contains "$out" "branch mismatch" "the default branch was refused as drift"
 
   FM_HOME="$home" "$BRIEF" branch-agree-a4 proj --mode no-mistakes --branch-prefix fix/ >/dev/null \
     || fail "a second fix/-prefixed brief should scaffold"
@@ -1403,7 +1403,7 @@ EOF
 # PRs do not read as firstmate-authored, but a spawn that deviates from it breaks
 # no contract: the brief-vs-spawn agreement above already guarantees the worker's
 # instructions match the branch this spawn selected. So the deviation is announced
-# and the spawn proceeds, while matching the registry (or its fm/ default) stays
+# and the spawn proceeds, while matching the registry (or its bare default) stays
 # quiet.
 test_spawn_notices_a_ship_branch_against_the_registry_prefix() {
   local rec home proj fakebin out
@@ -1414,8 +1414,8 @@ EOF
 
   write_brief "$home" prefix-dev-a1 no-mistakes
   out=$(run_spawn "$home" "$fakebin" prefix-dev-a1 "$proj" claude --mode no-mistakes --yolo off)
-  assert_contains "$out" "ships branch=fm/prefix-dev-a1 while proj registers the ship-branch prefix 'fix/'" \
-    "no deviation notice for shipping the legacy prefix past a registered override"
+  assert_contains "$out" "ships branch=prefix-dev-a1 while proj registers the ship-branch prefix 'fix/'" \
+    "no deviation notice for shipping the default branch past a registered override"
   assert_contains "$out" "will read as firstmate-authored" \
     "the deviation notice did not name the cost of the drift"
 
