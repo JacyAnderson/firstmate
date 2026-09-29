@@ -153,7 +153,7 @@ report_details() {  # <base> <fork-side-ref> <conflicts>
   fi
   printf '%s\n' "$conflicts" | print_paths conflict
   printf '%s\n' "$both" | print_paths review
-  g diff --no-renames -U0 "$base" "$UP_REF" | awk '
+  g diff-tree -r -p --no-renames -U0 "$base" "$UP_REF" | awk '
     /^\+\+\+ / { path = ($0 == "+++ /dev/null") ? "" : substr($0, 7); next }
     /^\+/ && path != "" && substr($0, 2) ~ /(^|[^A-Za-z0-9_.-])fm\// { count[path]++ }
     END { for (p in count) printf "fm-prefix: %s +%d\n", p, count[p] }

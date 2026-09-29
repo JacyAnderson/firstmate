@@ -108,6 +108,20 @@ upstream adds git checkout -b fm/\$ID" "upstream brief"
   pass "status reports conflicts and fm/ lines without touching the checkout"
 }
 
+test_status_fm_prefix_ignores_diff_noprefix() {
+  local w
+  w=$(new_world noprefix)
+  git -C "$w/work" config diff.noprefix true
+  upstream_commit "$w" f "git checkout -b fm/\$ID" "upstream short path"
+  upstream_commit "$w" bin/fm-brief.sh "base line
+upstream adds git checkout -b fm/\$ID" "upstream brief"
+  run_sync "$w" status
+  expect_code 0 "$RC" "status with diff.noprefix set"
+  assert_contains "$OUT" "fm-prefix: f +1" "a short path is still scanned under diff.noprefix"
+  assert_contains "$OUT" "fm-prefix: bin/fm-brief.sh +1" "the full path is reported under diff.noprefix"
+  pass "the fm/ scan does not depend on the user's diff config"
+}
+
 test_status_hotspot_and_review() {
   local w
   w=$(new_world hotspot)
@@ -299,6 +313,7 @@ test_merge_conflict_left_for_resolution() {
 test_status_current
 test_status_reports_without_touching_the_checkout
 test_status_hotspot_and_review
+test_status_fm_prefix_ignores_diff_noprefix
 test_status_flags_enabled_upstream_push
 test_status_flags_alternate_upstream_push_url
 test_status_fails_without_upstream_remote
