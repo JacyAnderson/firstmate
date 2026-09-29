@@ -17,7 +17,7 @@ Pi 0.81.1 was installed when Calm was first built, and Pi 0.82.0 was the later r
 The inspected Pi CHANGELOG shows no relevant presentation API introduced at either version, so those versions remain verification evidence rather than compatibility bounds.
 The exported classes used by the adapters (`AssistantMessageComponent` and `InteractiveMode`) are undocumented internals with no stated version guarantee.
 `tests/fm-calm-pi-extension.test.sh` records the installed Pi version as evidence without gating on it and covers both newer synthetic versions and an unavailable adapter seam.
-This host tracks Pi latest, so the version the evidence is pinned to moves; the [2026-09-07 record](#2026-09-07-pi-0851-renderer-and-export-dom-verification) owns the currently pinned version and the renderer comparison behind it.
+This host tracks Pi latest, so the version the evidence is pinned to moves; the [2026-09-29 record](#2026-09-29-pi-0990-and-0991-renderer-and-export-dom-verification) owns the currently pinned version and the renderer comparison behind it.
 
 ### Built-in tool override constraints
 
@@ -207,8 +207,8 @@ Every tool registered or supplied by Firstmate under `.pi/extensions` has this d
 | --- | --- | --- |
 | `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` | Calm wrappers for Pi's seven main-session built-ins | Their call and text-result shells hide while Calm is active; ordinary and stock export rendering delegate to Pi's original renderers. |
 | `fm_watch_arm_pi` | Main-session custom tool in `fm-primary-pi-watch.ts` | Its complete self-rendered shell hides while Calm is active and returns unchanged when Calm is off or stock export rendering is active. |
-| `fm_branch_outcomes` | Main-session custom tool in `fm-branch-supervision.ts` | Its complete self-rendered shell hides while Calm is active; when visible, the self-renderer reconstructs Pi's ordinary boxed fallback shell and probes Pi's rendered stock fallback to preserve that installed surface's collapsed or all-line output policy plus expanded state, while stock export rendering deliberately falls through to Pi's structured fallback. |
-| `fm_branch_processed` | Main-session custom tool in `fm-branch-supervision.ts` | Its complete self-rendered shell hides while Calm is active, exactly like `fm_branch_outcomes`; when visible, the self-renderer reconstructs Pi's ordinary boxed fallback shell around the one-line acknowledgement result, while stock export rendering deliberately falls through to Pi's structured fallback. |
+| `fm_branch_outcomes` | Main-session custom tool in `fm-branch-supervision.ts` | Its complete self-rendered shell hides while Calm is active; when visible, the self-renderer reconstructs Pi's ordinary boxed fallback shell and probes Pi's rendered stock fallback to preserve that installed surface's collapsed or all-line output policy, whether its title lists the call arguments, and expanded state, while stock export rendering deliberately falls through to Pi's structured fallback. |
+| `fm_branch_processed` | Main-session custom tool in `fm-branch-supervision.ts` | Its complete self-rendered shell hides while Calm is active, exactly like `fm_branch_outcomes`; when visible, the self-renderer reconstructs Pi's ordinary boxed fallback shell around the one-line acknowledgement result, with the same probed title, while stock export rendering deliberately falls through to Pi's structured fallback. |
 | `fm_branch_report` | Branch-session custom tool supplied directly to `createAgentSession` | It runs only in the headless supervision session and has no main-session `ToolExecutionComponent`; successful execution writes the outcome store and delivers a routine note or exact captain entry through the separately audited delivery path, so the tool cannot emit a dump-shaped row in the captain's transcript. |
 | branch-local `read` built-in | Branch-session built-in enabled through `createAgentSession` | It runs only in the headless supervision session and has no main-session `ToolExecutionComponent`, so its file output cannot emit a row in the captain's transcript. |
 | branch-local `bash` override | Branch-session replacement supplied directly to `createAgentSession` | It runs only in the headless supervision session and has no main-session `ToolExecutionComponent`, so its command output cannot emit a row in the captain's transcript. |
@@ -670,6 +670,47 @@ not ok - Pi 0.87.1 lacks the queue-retention capability Calm needs to hide queue
 ```
 
 With the queued-row adapter left uninstalled, the real-Pi Escape case failed on the listed notification, `Pi Calm listed a queued Firstmate notification`.
+
+## 2026-09-29 Pi 0.99.0 and 0.99.1 renderer and export-DOM verification
+
+Pi 0.99.0 changed two stock surfaces that the Calm contract compares against.
+
+Its stock `ToolExecutionComponent` call fallback titles a tool without a call renderer with its arguments: `key=value` pairs after the name when collapsed, and one `key: value` line per argument below it when expanded.
+Pi builds that title in `formatToolCallWithArgs`, which its package does not export.
+The `fm_branch_outcomes` and `fm_branch_processed` self-renderers titled the call with the tool name alone, so with Calm off their rows differed from Pi stock on the title line only.
+The one-time probe that measures Pi's stock preview policy also records whether the installed stock title lists arguments, and both self-renderers mirror that title, so Pi 0.87.1 keeps the bare title and Pi 0.99.x shows the arguments.
+
+Pi 0.99.0's HTML export writes `display: false` custom messages into the conversation as `hook-message hook-message-hidden` rows labelled `Hidden in terminal`.
+The export stylesheet hides those rows until the reader turns on `Show hidden messages` (`H`), and that toggle starts off on every load.
+Pi 0.87.1 left such messages out of the conversation markup entirely.
+The Calm boundary holds on both shapes: synthetic input stays out of the default conversation view and remains in the exported session data and sidebar tree.
+The rendered-export-DOM assertion checks that boundary rather than the older markup: every custom-message row in the conversation must be a hidden row, the synthetic marker may appear only inside hidden rows, and when hidden rows exist the export must hide them by default.
+
+Verified on Darwin 25.2.0 arm64, Node v24.14.0, tmux 3.7b, and Google Chrome 154.0.8037.58, with each Pi version installed into its own scratch prefix and selected through `FM_PI_PACKAGE_DIR` plus that prefix's `pi` on `PATH`, and TypeScript 7.0.2 installed only for the typecheck.
+
+```sh
+tests/fm-pi-branch-extension.test.sh
+tests/fm-calm-pi-extension.test.sh
+tests/fm-pi-primary-types.test.sh
+```
+
+Before the change, Pi 0.87.1 passed all three scripts, while Pi 0.99.0 failed:
+
+```text
+not ok - Pi outcomes rendering consumers must preserve stock behavior: file:///<tmp>/stock-render-consumers/[eval1]:71
+Error: Calm-off ToolExecutionComponent rendering differs from Pi stock
+not ok - rendered export DOM violated the Calm conversation boundary
+```
+
+After the change, all 50 branch-extension cases and all 15 Calm cases passed with none skipped against each of Pi 0.87.1, 0.99.0, and 0.99.1, including:
+
+```text
+ok - fm_branch_outcomes hides through ToolExecutionComponent while Calm-off and HTML export stay stock
+ok - Pi calm native E2E replaces the stock working row with a moving, resize-clamped working ship that freezes and resumes across two working periods in one Pi session, clears on abort, keeps captain turns visible, hides exact operational user rows without changing persistence, restores stock rendering Calm-off, survives restart, and preserves export plus Ctrl+O behavior
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 0.87.1
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 0.99.0
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 0.99.1
+```
 
 ## 2026-09-15 Claude Code 2.1.272 mods feasibility and the shipped mod
 

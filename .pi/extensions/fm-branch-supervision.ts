@@ -2113,13 +2113,15 @@ ${context.command}
       .replace(/\r/g, "");
   };
 
-  let stockOutcomesPreviewLines: number | null | undefined;
-  const getStockOutcomesPreviewLines = (): number | undefined => {
-    if (stockOutcomesPreviewLines !== undefined) return stockOutcomesPreviewLines ?? undefined;
+  type StockOutcomesFallback = { previewLines?: number; callShowsArgs: boolean };
+  let stockOutcomesFallback: StockOutcomesFallback | undefined;
+  const getStockOutcomesFallback = (): StockOutcomesFallback => {
+    if (stockOutcomesFallback) return stockOutcomesFallback;
     const probeTokens = Array.from(
       { length: 64 },
       (_, index) => `FM_OUTCOMES_PREVIEW_PROBE_${String(index).padStart(2, "0")}`,
     );
+    const argsProbeToken = "FM_OUTCOMES_ARGS_PROBE";
     try {
       const probeDefinition: ToolDefinition = {
         name: "fm_outcomes_preview_probe",
@@ -2131,7 +2133,7 @@ ${context.command}
       const probe = new ToolExecutionComponent(
         probeDefinition.name,
         "fm-outcomes-preview-probe",
-        {},
+        { probe: argsProbeToken },
         { showImages: false },
         probeDefinition,
         { requestRender() {} } as ConstructorParameters<typeof ToolExecutionComponent>[5],
@@ -2143,11 +2145,41 @@ ${context.command}
       });
       const rendered = probe.render(4096).join("\n");
       const visibleLines = probeTokens.filter((token) => rendered.includes(token)).length;
-      stockOutcomesPreviewLines = visibleLines > 0 && visibleLines < probeTokens.length ? visibleLines : null;
+      stockOutcomesFallback = {
+        previewLines: visibleLines > 0 && visibleLines < probeTokens.length ? visibleLines : undefined,
+        callShowsArgs: rendered.includes(argsProbeToken),
+      };
     } catch {
-      stockOutcomesPreviewLines = null;
+      stockOutcomesFallback = { callShowsArgs: false };
     }
-    return stockOutcomesPreviewLines ?? undefined;
+    return stockOutcomesFallback;
+  };
+
+  // Mirrors Pi's unexported formatToolCallWithArgs. The probe gates it because
+  // Pi before 0.99.0 titles a renderer-less call with the tool name alone.
+  const stockCollapsedArgsChars = 100;
+  const renderStockOutcomesCall = (
+    toolName: string,
+    args: unknown,
+    theme: Parameters<NonNullable<ToolDefinition["renderCall"]>>[1],
+    expanded: boolean,
+  ): Text => {
+    const header = theme.fg("toolTitle", theme.bold(toolName));
+    if (!getStockOutcomesFallback().callShowsArgs || args == null) return new Text(header, 0, 0);
+    const entries: Array<[string, unknown]> = typeof args === "object" && !Array.isArray(args)
+      ? Object.entries(args)
+      : [["args", args]];
+    if (entries.length === 0) return new Text(header, 0, 0);
+    if (expanded) {
+      const lines = entries.map(([key, value]) => {
+        const text = typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value));
+        return `  ${key}: ${text.replace(/\t/g, "   ").replace(/\r/g, "").split("\n").join("\n    ")}`;
+      });
+      return new Text(`${header}\n${theme.fg("muted", lines.join("\n"))}`, 0, 0);
+    }
+    const pairs = entries.map(([key, value]) => `${key}=${JSON.stringify(value) ?? String(value)}`).join(" ");
+    const preview = pairs.length > stockCollapsedArgsChars ? `${pairs.slice(0, stockCollapsedArgsChars - 3)}...` : pairs;
+    return new Text(`${header} ${theme.fg("muted", preview)}`, 0, 0);
   };
 
   type OutcomesToolShellState = {
@@ -2184,11 +2216,11 @@ ${context.command}
       recent: Type.Optional(Type.Number({ description: "How many most-recent outcomes to read (default 20)" })),
     }),
     renderShell: "self",
-    renderCall: (_args, theme, context) => {
+    renderCall: (args, theme, context) => {
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = new Text(theme.fg("toolTitle", theme.bold("fm_branch_outcomes")), 0, 0);
+      shellState.call = renderStockOutcomesCall("fm_branch_outcomes", args, theme, context.expanded);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, options, theme, context) => {
@@ -2202,7 +2234,7 @@ ${context.command}
       // Keep each line's ANSI scope independent, matching Pi's stock fallback.
       // Pi 0.84.4 no longer supplies an implicit reset at multiline boundaries.
       const lines = output.split("\n");
-      const previewLines = getStockOutcomesPreviewLines();
+      const previewLines = getStockOutcomesFallback().previewLines;
       const displayLines = options.expanded || previewLines === undefined ? lines : lines.slice(0, previewLines);
       const remaining = lines.length - displayLines.length;
       let renderedOutput = displayLines.map((line) => theme.fg("toolOutput", line)).join("\n");
@@ -2246,11 +2278,11 @@ ${context.command}
       through: Type.Number({ description: "The highest outcome sequence number this conversation has processed" }),
     }),
     renderShell: "self",
-    renderCall: (_args, theme, context) => {
+    renderCall: (args, theme, context) => {
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = new Text(theme.fg("toolTitle", theme.bold("fm_branch_processed")), 0, 0);
+      shellState.call = renderStockOutcomesCall("fm_branch_processed", args, theme, context.expanded);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, _options, theme, context) => {
