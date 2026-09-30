@@ -85,6 +85,7 @@ while IFS= read -r line || [ -n "$line" ]; do printf 'stdin=%s\n' "$line"; done
 SH
 chmod +x "$REMOTE_ROOT/bin"/*.sh
 git -C "$REMOTE_ROOT" init -q -b main
+fm_git_quiesce "$REMOTE_ROOT"
 git -C "$REMOTE_ROOT" config user.email test@example.com
 git -C "$REMOTE_ROOT" config user.name Test
 git -C "$REMOTE_ROOT" add AGENTS.md bin
