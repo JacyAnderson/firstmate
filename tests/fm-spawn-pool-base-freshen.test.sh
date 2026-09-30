@@ -29,6 +29,7 @@ make_case() {
   touch "$home/state/.last-watcher-beat"
 
   git init --quiet -b "$default" "$project"
+  fm_git_quiesce "$project"
   printf 'base\n' > "$project/README.md"
   git -C "$project" add README.md
   git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
@@ -476,6 +477,7 @@ make_submodule_case() {  # <name> <id>
   touch "$home/state/.last-watcher-beat"
 
   git init --quiet -b main "$sub"
+  fm_git_quiesce "$sub"
   printf 'pin one\n' > "$sub/lib.txt"
   git -C "$sub" add lib.txt
   git -C "$sub" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm sub-one
@@ -486,6 +488,7 @@ make_submodule_case() {  # <name> <id>
   git -C "$sub" checkout --quiet "$subpin1"
 
   git init --quiet -b main "$project"
+  fm_git_quiesce "$project"
   printf 'base\n' > "$project/README.md"
   git -C "$project" add README.md
   git -C "$project" -c protocol.file.allow=always -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \

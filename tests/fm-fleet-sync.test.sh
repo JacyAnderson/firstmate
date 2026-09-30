@@ -66,6 +66,7 @@ build_pair() {
   mkdir -p "$home/remotes"
 
   git init -q "$work"
+  fm_git_quiesce "$work"
   git -C "$work" symbolic-ref HEAD refs/heads/main
   commit_file "$work" file.txt v0 C0
 
@@ -112,6 +113,7 @@ build_enclosing_home() {
   mkdir -p "$root"
 
   git init -q "$work"
+  fm_git_quiesce "$work"
   git -C "$work" symbolic-ref HEAD refs/heads/main
   printf '/projects/\n' > "$work/.gitignore"
   git -C "$work" add .gitignore
@@ -145,6 +147,7 @@ build_packed_prunable() {
   mkdir -p "$home/remotes"
 
   git init -q "$work"
+  fm_git_quiesce "$work"
   git -C "$work" symbolic-ref HEAD refs/heads/main
   commit_file "$work" file.txt v0 C0
   git clone --quiet --bare "$work" "$remote"
