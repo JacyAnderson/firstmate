@@ -1,0 +1,6 @@
+fm-remote-secondmate-trace-context run1 PASS 106s
+fm-remote-secondmate-trace-context run2 PASS 107s
+fm-remote-secondmate-trace-context run3 PASS 102s
+fm-spawn-compact-adviser-disable-remote run1 PASS 54s
+fm-spawn-compact-adviser-disable-remote run2 PASS 52s
+fm-spawn-compact-adviser-disable-remote run3 PASS 53s

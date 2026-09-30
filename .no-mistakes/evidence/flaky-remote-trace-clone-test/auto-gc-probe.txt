@@ -1,0 +1,5 @@
+git version 2.54.0
+unquiesced quiesce=no gc.auto=default maintenance.auto=default loose_after=0 packs_after=1 auto_gc_invocations=0
+  clone ok
+quiesced quiesce=yes gc.auto=0 maintenance.auto=false loose_after=7002 packs_after=0 auto_gc_invocations=0
+  clone ok

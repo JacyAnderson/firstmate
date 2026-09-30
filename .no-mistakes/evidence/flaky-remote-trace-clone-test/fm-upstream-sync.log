@@ -1,0 +1,16 @@
+ok - status and merge report a current fork
+ok - status reports conflicts and fm/ lines without touching the checkout
+ok - status lists both-sides changes with hotspot notes
+ok - the fm/ scan does not depend on the user's diff config
+ok - status flags an upstream remote that can be pushed to
+ok - status flags an upstream push URL that differs from the fetch URL
+ok - status refuses without an upstream remote
+ok - status checks every upstream push URL and redacts credentials
+ok - status refuses a branch deleted on its remote
+ok - status ignores an inherited GIT_DIR
+ok - status treats a merge-tree conflict without a path as a conflict
+ok - merge refuses unsafe starting points
+ok - merge makes a real merge commit on a sync branch and pushes nothing
+ok - merge --branch cleans up the branch when git merge fails outright
+ok - merge leaves conflicts in the index and exits 1
+# all fm-upstream-sync tests passed
