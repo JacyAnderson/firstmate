@@ -614,14 +614,6 @@ fm_git_identity() {
   export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
 }
 
-# fm_git_quiesce <dir>: stop git's detached post-commit auto gc/maintenance in
-# <dir>. Git 2.54 can repack and prune loose objects in the background right
-# after a commit, which breaks a clone of the fixture started immediately after.
-fm_git_quiesce() {
-  git -C "$1" config gc.auto 0
-  git -C "$1" config maintenance.auto false
-}
-
 # fm_git_init_commit <dir>: create a git repo at <dir> with a README and one
 # commit. Uses an inline identity so it works whether or not fm_git_identity was
 # called. The initial branch is pinned rather than inherited from

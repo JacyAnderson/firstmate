@@ -108,6 +108,7 @@ EOF
 PROJ="$TMP_ROOT/scratch-project"
 mkdir -p "$PROJ"
 git -C "$PROJ" init -q
+fm_git_quiesce "$PROJ"
 printf '# scratch\n' > "$PROJ/README.md"
 git -C "$PROJ" add README.md
 git -C "$PROJ" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial

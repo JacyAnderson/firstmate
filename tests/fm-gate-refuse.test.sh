@@ -76,6 +76,7 @@ make_gate_worktree() {
 make_normal_repo() {
   local dir=$1
   git init -q -b main "$dir"
+  fm_git_quiesce "$dir"
   git -C "$dir" commit -q --allow-empty -m init
   printf '%s\n' "$dir"
 }

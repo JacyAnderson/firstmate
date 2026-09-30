@@ -39,6 +39,7 @@ new_world() {
   local w="$TMP_ROOT/$1"
   mkdir -p "$w"
   git init -q -b main "$w/up-src"
+  fm_git_quiesce "$w/up-src"
   commit_file "$w/up-src" bin/fm-brief.sh "base line" "base brief"
   commit_file "$w/up-src" notes.md "notes base" "base notes"
   commit_file "$w/up-src" other.md "other base" "base other"

@@ -129,6 +129,7 @@ make_case() {
   fake_root="$dir/root"
   mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/wt" "$fakebin" "$fake_root/bin"
   git -C "$dir/wt" init -q
+  fm_git_quiesce "$dir/wt"
   git -C "$dir/wt" commit -q --allow-empty -m init
   git -C "$dir/wt" update-ref refs/remotes/origin/main "$(git -C "$dir/wt" rev-parse HEAD)"
   cat > "$fake_root/bin/fm-guard.sh" <<'SH'

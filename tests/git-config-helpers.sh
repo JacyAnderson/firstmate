@@ -24,3 +24,11 @@
 # live vendor - and the changed-file map selects it for a change to this file.
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
+# fm_git_quiesce <dir>: stop git's detached post-commit auto gc/maintenance in
+# <dir>. Git 2.54 can repack and prune loose objects in the background right
+# after a commit, which breaks a clone of the fixture started immediately after.
+fm_git_quiesce() {
+  git -C "$1" config gc.auto 0
+  git -C "$1" config maintenance.auto false
+}

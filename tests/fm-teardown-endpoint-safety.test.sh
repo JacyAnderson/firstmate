@@ -15,6 +15,7 @@ make_case() {  # <name>
     "$TMP_ROOT/$dir/home/config" "$TMP_ROOT/$dir/fakebin" \
     "$TMP_ROOT/$dir/worktree" "$TMP_ROOT/$dir/project"
   git init -q "$TMP_ROOT/$dir/project"
+  fm_git_quiesce "$TMP_ROOT/$dir/project"
   : > "$TMP_ROOT/$dir/worktree/sentinel"
   : > "$TMP_ROOT/$dir/runtime.log"
   cat > "$TMP_ROOT/$dir/fakebin/tmux" <<'SH'
