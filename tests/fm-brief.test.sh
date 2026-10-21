@@ -1526,7 +1526,7 @@ test_base_branch_is_rendered_and_bounded() {
   base=$(fm_brief_base_branches "$brief")
   [ "$base" = feature/hub ] || fail "the direct-PR brief recorded base '$base', not feature/hub"
   # shellcheck disable=SC2016  # literal backticks in rendered prose must stay unexpanded
-  assert_grep 'open a PR with `gh-axi` that is ready for review, not a draft, against the base branch `feature/hub` (`--base feature/hub`)' "$brief" \
+  assert_grep 'open a PR with `gh-axi` whose description follows the PR/MR shape in rule 9 and that is ready for review, not a draft, against the base branch `feature/hub` (`--base feature/hub`)' "$brief" \
     "the direct-PR definition of done does not target the base branch"
   # shellcheck disable=SC2016
   assert_grep 'Never push to the base branch `feature/hub` or the default branch' "$brief" \
