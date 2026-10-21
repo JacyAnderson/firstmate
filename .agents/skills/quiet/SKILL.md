@@ -2,8 +2,7 @@
 name: quiet
 description: >-
   Enter quiet supervision mode when the captain invokes /quiet or asks for quiet mode, quiet-while-present, or fewer routine wake turns while they stay in the session.
-  Where Pi's supervision branch or an attended supervision host already keeps routine wakes off the conversation, it enters nothing and says so.
-  Elsewhere it sets the same durable away/quiet-mode flag as /afk, in `quiet` mode, so the sub-supervisor daemon self-handles routine wakes and escalates captain-relevant events exactly as away mode does, but ordinary captain chat does NOT exit it - only an explicit `/quiet off` does.
+  Unlike /afk, ordinary captain chat does not exit it; only an explicit `/quiet off` does.
 user-invocable: true
 metadata:
   internal: true
@@ -16,10 +15,8 @@ daemon tradeoff as `/afk`, made explicit for a captain who is staying,
 watching the session, and does not want to exit the mode just by chatting.
 
 Where a daemon runs, this skill is a thin wrapper.
-Every mechanism below - the daemon, its injection, its busy/composer guards,
-its classification policy, its reliability properties - is owned once by the
-`afk` skill and is IDENTICAL in quiet mode; nothing here restates it.
-Quiet mode uses the daemon without making the present captain's requested actions wait for a return.
+The `afk` skill owns the daemon's injection, busy/composer guards, and reliability properties; quiet mode uses that machinery while the captain remains present.
+For captain-held rechecks under quiet, see [architecture](../../../docs/architecture.md).
 
 ## What it does
 
@@ -35,12 +32,12 @@ Quiet mode uses the daemon without making the present captain's requested action
 1. **Enter the lifecycle through `bin/fm-afk-launch.sh`, exactly as `/afk`
    does, with `FM_AFK_MODE=quiet` set first.**
    Follow the `afk` skill's record entry, daemon launch, and announcement steps,
-   except that on an opted-in host home its `/afk` no-daemon rule does not apply
+   except that on a home that runs the supervision host its `/afk` no-daemon rule does not apply
    after `quiet-check` exits 1. Never arm a separate `fm-watch.sh`. Export
    `FM_AFK_MODE=quiet` in the shell that invokes `bin/fm-afk-launch.sh enter`
    and `start` (or `start-native`), so the record notes quiet mode and
    `state/.afk`'s first line reads `quiet` instead of `away`.
-   On a home with `config/supervision-host`, launch the daemon on the path
+   On a home that runs the supervision host, launch the daemon on the path
    this harness uses without the host; `start` and `start-native` take quiet
    mode from the record `enter` wrote.
    Keep `FM_AFK_MODE=quiet` on a quiet refresh: an `/afk` entry, even without new words, replaces a quiet record with an away record and starts hold-for-return.

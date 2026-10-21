@@ -1,7 +1,7 @@
 # Repo text rule
 
 This file is the single owner of the rule for text that a worker writes into a repository: code comments, commit messages, and pull or merge request text.
-`bin/fm-brief.sh` inlines the block between the `rule-start` and `rule-end` markers as rule 8 of every ship and scout brief, then appends the path-specific instruction to run `bin/fm-text-check.sh --staged` before each commit.
+`bin/fm-brief.sh` inlines the block between the `rule-start` and `rule-end` markers as rule 9 of every ship and scout brief, then appends the path-specific instruction to run `bin/fm-text-check.sh --staged` before each commit.
 Edit the rule here and nowhere else; the brief, the checker's banned-phrase list (held to this block by `tests/fm-text-check.test.sh`), and any project-level exception all point back to this file.
 
 The rule follows the study recorded in the firstmate owner's investigation of agent-written comments: workers follow the brief exactly, so the brief has to be specific about length and shape, not only vocabulary.
