@@ -93,7 +93,7 @@ hotspot_note() {
     bin/fm-project-mode.sh|bin/fm-brief.sh|bin/fm-spawn.sh|bin/fm-promote.sh|bin/fm-dod-lib.sh|\
     AGENTS.md|README.md|docs/architecture.md|\
     tests/fm-brief.test.sh|tests/fm-task-delivery.test.sh|tests/fm-control-relaunch.test.sh|tests/fm-fleet-ledger.test.sh|\
-    tests/fm-self-repo-role.test.sh)
+    tests/fm-self-repo-role.test.sh|tests/fm-spawn-external-review.test.sh)
       notes="$notes; branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh" ;;
   esac
   case "$1" in

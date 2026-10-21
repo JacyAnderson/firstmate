@@ -48,7 +48,7 @@ Exercise the external review spawn path.
 
 # Definition of done
 Delivery contract: mode=direct-PR forge=external
-Ship branch: fm/$id
+Ship branch: $id
 EOF
 }
 
@@ -92,10 +92,12 @@ test_spawn_refusals_before_launch() {
 
   id=ext-prefix-r1
   make_case prefix "$id"
+  sed "s|^Ship branch: $id\$|Ship branch: fm/$id|" "$HOME_DIR/data/$id/brief.md" > "$CASE_DIR/brief.md"
+  mv "$CASE_DIR/brief.md" "$HOME_DIR/data/$id/brief.md"
   printf 'backup\nprefix=fm/copies/\n' > "$HOME_DIR/config/external-review-backup"
   git init --quiet --bare "$CASE_DIR/backup.git"
   git -C "$PROJECT_DIR" remote add backup "file://$CASE_DIR/backup.git"
-  out=$(run_spawn "$id" --mode direct-PR --yolo off); status=$?
+  out=$(run_spawn "$id" --mode direct-PR --yolo off --branch-prefix fm/); status=$?
   refused_before_launch "$id" "a backup prefix inside the task prefix" "starts with the task branch prefix" "$out" "$status"
 
   id=ext-mismatch-r1
@@ -123,9 +125,9 @@ test_spawn_installs_the_guard_and_records_the_task() {
   hooks=$(cd "$HOME_DIR/state" && pwd -P)/$id.git-hooks
   [ -x "$hooks/pre-push" ] || fail "keep-ai-trailers skipped the push guard hooks"
   out=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$hooks \
-    git -C "$POOL_DIR" push origin "HEAD:refs/heads/fm/$id" 2>&1) && fail "the installed guard let the task branch reach origin"
+    git -C "$POOL_DIR" push origin "HEAD:refs/heads/$id" 2>&1) && fail "the installed guard let the task branch reach origin"
   assert_contains "$out" "fm-git-push-guard: refused:" "the task-branch push was not refused by the guard"
-  git -C "$ORIGIN_DIR" rev-parse --verify --quiet "refs/heads/fm/$id" >/dev/null \
+  git -C "$ORIGIN_DIR" rev-parse --verify --quiet "refs/heads/$id" >/dev/null \
     && fail "the task branch reached the shared origin"
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$hooks \
     git -C "$POOL_DIR" push --quiet backup "HEAD:refs/heads/backup/$id" \
