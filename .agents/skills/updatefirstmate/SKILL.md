@@ -3,7 +3,6 @@ name: updatefirstmate
 description: >-
   Self-update a running firstmate and its secondmates to the latest from origin.
   Use when the captain invokes /updatefirstmate (e.g. "/updatefirstmate", "update firstmate", "pull the latest firstmate").
-  Updates this firstmate repo's default branch and every local or remote secondmate through its guarded convergence path (never forced, never disruptive), then re-reads AGENTS.md and restarts every live second mate through the persist-gated restart, with a fallback re-read nudge only where a restart cannot be proven.
   Also use when the captain asks to pull, sync, or merge upstream firstmate changes into this fork; its Upstream sync section owns that routine.
 user-invocable: true
 metadata:
@@ -16,6 +15,7 @@ Self-update firstmate in place.
 Firstmate is its own repo, behind the same no-mistakes gate as any project, so new tracked material (`AGENTS.md`, `bin/`, `.agents/skills/`, and public `skills/`) reaches `main` and then sits there until each running firstmate pulls it.
 Only `AGENTS.md`, `bin/`, and `.agents/skills/` are a running firstmate instruction surface; public `skills/` is installer-facing and is not loaded by firstmate.
 This skill performs that pull for the running main firstmate and every secondmate, without disturbing any in-flight work.
+Updating is consumption, not publication: it only pulls from upstream, so every home runs it regardless of role, and the firstmate-repository publication boundary (`firstmate-self-repo`) never applies to it.
 
 Pulling the files is only half of it.
 A running agent holds `AGENTS.md` and every skill it has already loaded frozen from the moment it launched, and no verified harness offers a reload, so new bytes on disk change nothing for it until it starts a fresh conversation.
@@ -120,6 +120,7 @@ The update above only fast-forwards from origin, so upstream changes reach the f
    On `summary: current`, say the fork is up to date and stop.
    On `upstream-push: ENABLED`, say so and ask the captain to disable upstream pushes (`git remote set-url --push upstream DISABLED`) before going further.
 2. **Merge only on the captain's go.**
+   The spawn refuses a firstmate-repo ship task unless this home holds publication authority for the fork itself, through a `config/firstmate-role` maintainer scope or a one-task consent naming the fork, never the template repository (`firstmate-self-repo` owns the grant).
    Dispatch a ship task on the firstmate repo through its registered delivery path, and have its instructions require the worker to:
    - run `bin/fm-upstream-sync.sh merge` on its task branch, which makes a real merge, and never rebase, squash, or rebuild the branch from upstream;
    - resolve each conflict and check each both-sides file for a fork change upstream now supersedes or silently undoes, then carry each fork change onto upstream's structure or drop it where upstream covers it;

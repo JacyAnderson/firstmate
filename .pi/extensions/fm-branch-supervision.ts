@@ -94,7 +94,10 @@ import {
   type ModelRegistry,
   SessionManager,
   ToolExecutionComponent,
+  VERSION,
   type AgentSession,
+  type BeforeAgentStartEvent,
+  type MessageStartEvent,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ToolDefinition,
@@ -229,6 +232,14 @@ function offerEligible(offer: BranchDispatchOffer): boolean {
   return offer.eligible === true;
 }
 
+// Identify the supported custom trigger before prompt-only SDKs can narrow it
+// to never. The message type comes from the public SDK in both releases.
+function isCustomBeforeAgentStart(event: BeforeAgentStartEvent): event is BeforeAgentStartEvent & {
+  message: Extract<MessageStartEvent["message"], { role: "custom" }>;
+} {
+  return !("prompt" in event) && "message" in event;
+}
+
 function isProcessingCustomMessage(message: { role?: string; customType?: string }): boolean {
   return message.role === "custom" && message.customType === PROCESSING_MESSAGE_TYPE;
 }
@@ -266,10 +277,9 @@ type FollowMainResolution =
 // come from Pi's own getSupportedThinkingLevels/clampThinkingLevel, so this
 // array exists for exactly one job the type system cannot do at runtime:
 // rejecting a hand-edited pin token Pi would not recognize at all. The
-// assertion below fails the tracked strict typecheck against the INSTALLED Pi
-// package (tests/fm-pi-primary-types.test.sh) the moment Pi adds or removes a
-// level, in either direction, so the list cannot drift into a stale Firstmate
-// catalog.
+// assertion below fails compilation if the SDK's types add or remove a level,
+// in either direction, so this list cannot drift from the checked vocabulary.
+// tests/fm-pi-primary-types.test.sh owns the checked SDK matrix.
 const BRANCH_EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type DeclaredBranchEffort = (typeof BRANCH_EFFORT_LEVELS)[number];
 const piOwnsTheEffortVocabulary: [DeclaredBranchEffort] extends [BranchEffort]
@@ -652,10 +662,16 @@ export default function (pi: ExtensionAPI) {
   // queued for the captain's next prompt. The durable truth is the store's
   // processed marker; this only paces re-presentation and resets with the
   // session generation.
-  type ProcessingState = { sequences: string; through: number; triggered: number; pending: boolean; nextTurnQueued: boolean };
+  type ProcessingState = { sequences: string; through: number; triggered: number; pending: boolean; nextTurnQueued: boolean; visibleFinals: Set<string> };
   let processing: ProcessingState | null = null;
   let queuedProcessingContent: string | null = null;
   let processingOpenedThisRun = false;
+  // Compare only replies to the same consumed sequence set. A retry can be
+  // the first real handling, so only an empty or exact-repeat final is hidden.
+  // Buffer retry streaming until message_end can make that decision; tool
+  // messages always keep their prose, and a user message ends this scope.
+  let activeProcessing: { request: ProcessingState; retry: boolean } | null = null;
+  let userMessageThisTurn = false;
   let processedInitializedGeneration = -1;
   // One revision for BOTH selections: a model or effort change invalidates an
   // in-flight branch build exactly the same way.
@@ -1094,7 +1110,7 @@ export default function (pi: ExtensionAPI) {
     }
     if (processing?.pending) return true;
     if (!processing || processing.sequences !== sequences) {
-      processing = { sequences, through, triggered: 0, pending: false, nextTurnQueued: false };
+      processing = { sequences, through, triggered: 0, pending: false, nextTurnQueued: false, visibleFinals: new Set() };
     }
     // A presentation already sent is consumed by the run it joins or opens;
     // until that run settles, sending a widened or identical copy would hand
@@ -1663,20 +1679,25 @@ ${context.command}
   // synchronous read it replaces did. The generation is captured before that
   // await so a session replaced while it runs cannot be staged into.
   pi.on?.("before_agent_start", async (event, ctx) => {
+    if (isCustomBeforeAgentStart(event)) {
+      processingOpenedThisRun = queuedProcessingContent !== null &&
+        isProcessingCustomMessage(event.message) && event.message.content === queuedProcessingContent;
+      return;
+    }
+    if (!("prompt" in event)) return;
     rememberMainModel(ctx);
     currentMainSession = ctx?.sessionManager ?? null;
     const promptGeneration = generation;
     if (!(await enqueueDelivery(() => actingAsOwner(promptGeneration)))) return;
     if (promptGeneration !== generation || !currentMainSession || !collectCurrentMainDialog()) return;
 
-    // This event is Pi's authoritative complete current prompt. At this point
+    // For user messages this event is Pi's authoritative complete current prompt. At this point
     // SessionManager still contains only the preceding dialog, so relying on
     // getEntries() here loses the captain request that the next wake may answer.
     // Stage it verbatim and remember the future persisted index for turn_end's
     // duplicate suppression. Operational extension injections are not dialog.
     const prompt = event.prompt;
     processingOpenedThisRun = queuedProcessingContent !== null && prompt === queuedProcessingContent;
-    if (processingOpenedThisRun) queuedProcessingContent = null;
     const trimmed = prompt.trim();
     if (!trimmed || isOperationalUserText(trimmed)) return;
     const file = currentMainSession.getSessionFile() ?? "";
@@ -1690,6 +1711,48 @@ ${context.command}
     // Pi delivers a queued nextTurn copy with the prompt that starts this run,
     // so a fresh copy may be queued again once this run settles unacknowledged.
     if (processing) processing.nextTurnQueued = false;
+  });
+  pi.on?.("turn_start", () => {
+    userMessageThisTurn = false;
+  });
+  pi.on?.("message_start", (event) => {
+    if (event.message.role === "user") {
+      userMessageThisTurn = true;
+      activeProcessing = null;
+    } else if (
+      event.message.role === "custom" &&
+      isProcessingCustomMessage(event.message) &&
+      queuedProcessingContent !== null &&
+      event.message.content === queuedProcessingContent
+    ) {
+      // message_start covers both an idle custom prompt and a follow-up
+      // consumed inside an existing run; neither needs before_agent_start.
+      activeProcessing = !userMessageThisTurn && processing ? { request: processing, retry: processing.triggered > 1 } : null;
+      queuedProcessingContent = null;
+    }
+  });
+  pi.registerMarkdownTransformer?.((markdown, context) =>
+    activeProcessing?.retry && context.isStreaming && context.messageType !== "user" ? "" : markdown,
+  );
+  pi.on?.("message_end", (event) => {
+    if (!activeProcessing || event.message.role !== "assistant") return;
+    // message_end runs before tool execution. Keep the whole message when
+    // it carries a call, including prose alongside fm_branch_processed.
+    if (event.message.content.some((part) => part.type === "toolCall")) return;
+    const text = event.message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
+    const { request, retry } = activeProcessing;
+    if (!retry || (text && !request.visibleFinals.has(text))) {
+      if (text) request.visibleFinals.add(text);
+      return;
+    }
+    // Pi applies the replacement before persistence and transcript rendering.
+    // Preserve the message envelope, including provider usage accounting.
+    return {
+      message: {
+        ...event.message,
+        content: [],
+      },
+    };
   });
   pi.on?.("context", (event, ctx) => {
     if (!afkPostureRecordPresent(state)) return;
@@ -1713,6 +1776,7 @@ ${context.command}
     mainStreaming = false;
     queuedProcessingContent = null;
     processingOpenedThisRun = false;
+    activeProcessing = null;
     if (processing) processing.pending = false;
     const settledGeneration = generation;
     await enqueueDelivery(async () => {
@@ -1772,6 +1836,8 @@ ${context.command}
     consecutiveProviderErrors = 0;
     providerRecovery = null;
     generation += 1;
+    activeProcessing = null;
+    userMessageThisTurn = false;
     mirrorCollection.collectAnchor = null;
     mirrorCollection.pendingCursor = null;
     mirrorCollection.stagedCaptain = null;
@@ -1820,6 +1886,9 @@ ${context.command}
     shuttingDown = true;
     generation += 1;
     processing = null;
+    queuedProcessingContent = null;
+    activeProcessing = null;
+    userMessageThisTurn = false;
     pendingMirror.length = 0;
     currentMainSession = null;
     mirrorCollection.collectAnchor = null;
@@ -2113,15 +2182,13 @@ ${context.command}
       .replace(/\r/g, "");
   };
 
-  type StockOutcomesFallback = { previewLines?: number; callShowsArgs: boolean };
-  let stockOutcomesFallback: StockOutcomesFallback | undefined;
-  const getStockOutcomesFallback = (): StockOutcomesFallback => {
-    if (stockOutcomesFallback) return stockOutcomesFallback;
+  let stockOutcomesPreviewLines: number | null | undefined;
+  const getStockOutcomesPreviewLines = (): number | undefined => {
+    if (stockOutcomesPreviewLines !== undefined) return stockOutcomesPreviewLines ?? undefined;
     const probeTokens = Array.from(
       { length: 64 },
       (_, index) => `FM_OUTCOMES_PREVIEW_PROBE_${String(index).padStart(2, "0")}`,
     );
-    const argsProbeToken = "FM_OUTCOMES_ARGS_PROBE";
     try {
       const probeDefinition: ToolDefinition = {
         name: "fm_outcomes_preview_probe",
@@ -2133,7 +2200,7 @@ ${context.command}
       const probe = new ToolExecutionComponent(
         probeDefinition.name,
         "fm-outcomes-preview-probe",
-        { probe: argsProbeToken },
+        {},
         { showImages: false },
         probeDefinition,
         { requestRender() {} } as ConstructorParameters<typeof ToolExecutionComponent>[5],
@@ -2145,41 +2212,11 @@ ${context.command}
       });
       const rendered = probe.render(4096).join("\n");
       const visibleLines = probeTokens.filter((token) => rendered.includes(token)).length;
-      stockOutcomesFallback = {
-        previewLines: visibleLines > 0 && visibleLines < probeTokens.length ? visibleLines : undefined,
-        callShowsArgs: rendered.includes(argsProbeToken),
-      };
+      stockOutcomesPreviewLines = visibleLines > 0 && visibleLines < probeTokens.length ? visibleLines : null;
     } catch {
-      stockOutcomesFallback = { callShowsArgs: false };
+      stockOutcomesPreviewLines = null;
     }
-    return stockOutcomesFallback;
-  };
-
-  // Mirrors Pi's unexported formatToolCallWithArgs. The probe gates it because
-  // Pi before 0.99.0 titles a renderer-less call with the tool name alone.
-  const stockCollapsedArgsChars = 100;
-  const renderStockOutcomesCall = (
-    toolName: string,
-    args: unknown,
-    theme: Parameters<NonNullable<ToolDefinition["renderCall"]>>[1],
-    expanded: boolean,
-  ): Text => {
-    const header = theme.fg("toolTitle", theme.bold(toolName));
-    if (!getStockOutcomesFallback().callShowsArgs || args == null) return new Text(header, 0, 0);
-    const entries: Array<[string, unknown]> = typeof args === "object" && !Array.isArray(args)
-      ? Object.entries(args)
-      : [["args", args]];
-    if (entries.length === 0) return new Text(header, 0, 0);
-    if (expanded) {
-      const lines = entries.map(([key, value]) => {
-        const text = typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value));
-        return `  ${key}: ${text.replace(/\t/g, "   ").replace(/\r/g, "").split("\n").join("\n    ")}`;
-      });
-      return new Text(`${header}\n${theme.fg("muted", lines.join("\n"))}`, 0, 0);
-    }
-    const pairs = entries.map(([key, value]) => `${key}=${JSON.stringify(value) ?? String(value)}`).join(" ");
-    const preview = pairs.length > stockCollapsedArgsChars ? `${pairs.slice(0, stockCollapsedArgsChars - 3)}...` : pairs;
-    return new Text(`${header} ${theme.fg("muted", preview)}`, 0, 0);
+    return stockOutcomesPreviewLines ?? undefined;
   };
 
   type OutcomesToolShellState = {
@@ -2206,6 +2243,41 @@ ${context.command}
     return shell;
   };
 
+  // Pi's stock call header (formatToolCallWithArgs) is not a public export.
+  // Before Pi 0.99 it is the bold title alone. Since Pi 0.99 a collapsed call
+  // is `title key=json` on the title line, cut at 100 characters, and an
+  // expanded call puts one muted `key: value` line under the title. Calm-off
+  // rendering has to match the installed Pi or the stock comparison fails.
+  // Keep this in step with that function.
+  const [stockMajor = 0, stockMinor = 0] = VERSION.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const stockCallHeaderShowsArgs = stockMajor > 0 || stockMinor >= 99;
+  const stockCollapsedArgsChars = 100;
+  const stockToolCallHeader = (
+    title: string,
+    args: unknown,
+    theme: Parameters<NonNullable<ToolDefinition["renderCall"]>>[1],
+    expanded: boolean,
+  ): string => {
+    const header = theme.fg("toolTitle", theme.bold(title));
+    if (!stockCallHeaderShowsArgs || args == null) return header;
+    const entries = typeof args === "object" && !Array.isArray(args)
+      ? Object.entries(args)
+      : [["args", args] as [string, unknown]];
+    if (entries.length === 0) return header;
+    if (expanded) {
+      const lines = entries.map(([key, value]) => {
+        const text = typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value));
+        return `  ${key}: ${text.replace(/\t/g, "   ").replace(/\r/g, "").split("\n").join("\n    ")}`;
+      });
+      return `${header}\n${theme.fg("muted", lines.join("\n"))}`;
+    }
+    const pairs = entries.map(([key, value]) => `${key}=${JSON.stringify(value) ?? String(value)}`).join(" ");
+    const preview = pairs.length > stockCollapsedArgsChars
+      ? `${pairs.slice(0, stockCollapsedArgsChars - 3)}...`
+      : pairs;
+    return `${header} ${theme.fg("muted", preview)}`;
+  };
+
   registerFirstmateTool(pi, {
     name: "fm_branch_outcomes",
     label: "Read supervision branch outcomes",
@@ -2220,7 +2292,7 @@ ${context.command}
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = renderStockOutcomesCall("fm_branch_outcomes", args, theme, context.expanded);
+      shellState.call = new Text(stockToolCallHeader("fm_branch_outcomes", args, theme, context.expanded), 0, 0);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, options, theme, context) => {
@@ -2234,7 +2306,7 @@ ${context.command}
       // Keep each line's ANSI scope independent, matching Pi's stock fallback.
       // Pi 0.84.4 no longer supplies an implicit reset at multiline boundaries.
       const lines = output.split("\n");
-      const previewLines = getStockOutcomesFallback().previewLines;
+      const previewLines = getStockOutcomesPreviewLines();
       const displayLines = options.expanded || previewLines === undefined ? lines : lines.slice(0, previewLines);
       const remaining = lines.length - displayLines.length;
       let renderedOutput = displayLines.map((line) => theme.fg("toolOutput", line)).join("\n");
@@ -2282,7 +2354,7 @@ ${context.command}
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = renderStockOutcomesCall("fm_branch_processed", args, theme, context.expanded);
+      shellState.call = new Text(stockToolCallHeader("fm_branch_processed", args, theme, context.expanded), 0, 0);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, _options, theme, context) => {
@@ -2335,6 +2407,9 @@ ${context.command}
           };
         }
         const remaining = await readUnprocessedOutcomes(acknowledgedGeneration);
+        if (acknowledgedGeneration === generation && activeProcessing && through >= activeProcessing.request.through) {
+          activeProcessing = null;
+        }
         if (remaining !== null && remaining.length === 0) processing = null;
         const open = remaining === null
           ? "the remaining outcomes could not be read"

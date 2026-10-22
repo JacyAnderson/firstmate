@@ -92,17 +92,25 @@ hotspot_note() {
   case "$1" in
     bin/fm-project-mode.sh|bin/fm-brief.sh|bin/fm-spawn.sh|bin/fm-promote.sh|bin/fm-dod-lib.sh|\
     AGENTS.md|README.md|docs/architecture.md|\
-    tests/fm-brief.test.sh|tests/fm-task-delivery.test.sh|tests/fm-control-relaunch.test.sh|tests/fm-fleet-ledger.test.sh)
+    tests/fm-brief.test.sh|tests/fm-task-delivery.test.sh|tests/fm-control-relaunch.test.sh|tests/fm-fleet-ledger.test.sh|\
+    tests/fm-self-repo-role.test.sh|tests/fm-spawn-external-review.test.sh)
       notes="$notes; branch-prefix default: keep the bare <id> default from FM_DEFAULT_BRANCH_PREFIX in bin/fm-branch-prefix-lib.sh" ;;
   esac
   case "$1" in
-    bin/fm-brief.sh) notes="$notes; repo-text rule 8 renders after upstream's rule 7" ;;
-    bin/fm-dod-lib.sh) notes="$notes; rule 8 PR-description steps sit in fm_dod_block's direct-PR and no-mistakes cases" ;;
-    bin/fm-spawn.sh) notes="$notes; FM_SPAWN_WORKTREE_TIMEOUT and the branchless-record relaunch fallback" ;;
+    bin/fm-brief.sh|tests/fm-brief.test.sh)
+      notes="$notes; the repo-text rule renders as rule 9, after upstream's numbered rules" ;;
+  esac
+  case "$1" in
+    bin/fm-dod-lib.sh) notes="$notes; rule 9 PR-description steps sit in fm_dod_block's direct-PR and no-mistakes cases" ;;
+    bin/fm-spawn.sh|tests/fm-spawn-worktree-settle.test.sh)
+      notes="$notes; FM_SPAWN_WORKTREE_TIMEOUT and the branchless-record relaunch fallback" ;;
+    tests/git-config-helpers.sh) notes="$notes; fm_git_quiesce for commit-then-clone fixtures" ;;
+    docs/architecture.md) notes="$notes; review-comment polling in the actionable-wake list" ;;
     bin/fm-merge-local.sh|bin/fm-review-diff.sh|bin/fm-bearings-snapshot.sh)
       notes="$notes; a record without branch= uses the bare <id> branch when it exists, else fm/<id>" ;;
     bin/fm-pr-check.sh|bin/fm-pr-poll.sh) notes="$notes; pr-comments review-comment wakes (GitHub and GitLab only)" ;;
-    bin/fm-captain-hold.sh|docs/captain-hold-lifecycle.md) notes="$notes; Done-archive lookup for answered captain calls" ;;
+    bin/fm-captain-hold.sh|docs/captain-hold-lifecycle.md|tests/fm-captain-hold-lifecycle.test.sh)
+      notes="$notes; Done-archive lookup for answered captain calls" ;;
     bin/fm-test-run.sh) notes="$notes; test family lists: keep both sides' entries" ;;
     .github/workflows/ci.yml) notes="$notes; Bearings test count is upstream's plus the fork's" ;;
     .github/workflows/no-mistakes-required.yml) notes="$notes; fork owner exemption" ;;
