@@ -29,7 +29,8 @@ A scout launches without the guard and the task record, so `bin/fm-promote.sh` r
 
 A worker copy's commits live only in the copy and in the review tool's snapshot.
 `config/external-review-backup` may name a git remote, pointing at storage the captain alone controls, that holds a durable copy at `refs/heads/<backup-prefix><task-id>` (default prefix `backup/`).
-The backup prefix must be non-empty and must neither equal nor start with the task branch prefix, so a durable copy never reads as a delivery branch and the guard's task-prefix rule stays unconditional.
+The backup prefix must be non-empty and, when the project registers a task branch prefix, must neither equal nor start with it, so a durable copy never reads as a delivery branch and the guard's task-prefix rule stays unconditional.
+Under the default bare `<task-id>` branch there is no task prefix to overlap, and the guard refuses the task branch itself by name.
 Spawn refuses a backup remote the project does not have, or one whose URL matches origin's.
 Where the backup remote points is the captain's call; firstmate cannot police it, so a project whose code must not leave a network needs a backup inside that network.
 
