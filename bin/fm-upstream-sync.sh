@@ -106,13 +106,13 @@ hotspot_note() {
       notes="$notes; FM_SPAWN_WORKTREE_TIMEOUT and the branchless-record relaunch fallback" ;;
     tests/git-config-helpers.sh) notes="$notes; fm_git_quiesce for commit-then-clone fixtures" ;;
     docs/architecture.md) notes="$notes; review-comment polling in the actionable-wake list" ;;
-    bin/fm-merge-local.sh|bin/fm-review-diff.sh|bin/fm-bearings-snapshot.sh)
+    bin/fm-merge-local.sh|bin/fm-review-diff.sh|bin/fm-bearings-snapshot.sh|tests/fm-merge-local.test.sh)
       notes="$notes; a record without branch= uses the bare <id> branch when it exists, else fm/<id>" ;;
-    bin/fm-pr-check.sh|bin/fm-pr-poll.sh) notes="$notes; pr-comments review-comment wakes (GitHub and GitLab only)" ;;
-    bin/fm-captain-hold.sh|docs/captain-hold-lifecycle.md|tests/fm-captain-hold-lifecycle.test.sh)
-      notes="$notes; Done-archive lookup for answered captain calls" ;;
+    bin/fm-pr-check.sh|bin/fm-pr-poll.sh|bin/fm-teardown.sh|tests/fm-pr-check-security.test.sh)
+      notes="$notes; pr-comments review-comment wakes (GitHub and GitLab only)" ;;
     bin/fm-test-run.sh) notes="$notes; test family lists: keep both sides' entries" ;;
-    .github/workflows/ci.yml) notes="$notes; Bearings test count is upstream's plus the fork's" ;;
+    tests/fm-bearings-snapshot.test.sh) notes="$notes; keep the fork's bare-branch PR test in the fm_test_run list" ;;
+    docs/configuration.md) notes="$notes; FM_SPAWN_WORKTREE_TIMEOUT and review-comment wording in the environment list" ;;
     .github/workflows/no-mistakes-required.yml) notes="$notes; fork owner exemption" ;;
     docs/scripts.md) notes="$notes; keep the fork's rows (fm-text-check.sh, fm-upstream-sync.sh, review-comment poll)" ;;
     .agents/skills/updatefirstmate/SKILL.md) notes="$notes; fork's upstream sync section" ;;
