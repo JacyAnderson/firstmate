@@ -47,6 +47,13 @@
 # them and finish with `git commit --no-edit`.
 # Exit 2: refused or failed, with nothing merged.
 #
+# Stale base: when an earlier sync landed as a squash, git loses upstream's
+# history, so merge-base stays at an older upstream commit and both modes list
+# conflicts the fork already resolved. Recover by running merge, replacing the
+# index and tree with `git merge-tree --write-tree --merge-base <last merged
+# upstream tip> <fork tip> <upstream tip>` (`git read-tree -u --reset <tree>`),
+# resolving what that tree still conflicts on, and committing with --no-edit.
+#
 # hotspot_note below is the fork's list of recurring conflict sites; add an
 # entry when a sync hits a new one that will recur.
 #
