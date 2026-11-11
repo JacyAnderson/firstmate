@@ -695,6 +695,11 @@ test_matrix_omp_18_18_live_fixtures() {
   _fm_composer_row_is_omp_status ' explore-1 · ◑ Opus 5.5 (US) · ⑂ main' \
     && fail "an omp status row with neither identity, spinner nor context cell must not be furniture"
   assert_screen "an omp 18.18.8 status row bounded by its 1M context cell alone" empty "$CAPS_STYLED" "$screen"
+  # A wrapped draft with a middle dot and a usage-shaped token is still typed
+  # input: only a cell opening with the `◫` icon counts as context.
+  screen=$'transcript line\n\n❯ please record the\ndraft · coverage 50%/1M tokens\n π · ◑ Opus 5.5 (US) · ◫ 53.9%/1M'
+  assert_screen "a wrapped draft shaped like a context cell stays pending" pending "$CAPS_STYLED" "$screen"
+  assert_screen "a wrapped draft shaped like a context cell stays pending under the cursor" pending "$CAPS_TMUX" "$screen" 3
   # Anything that is not a recognized composer stays unknown: the same screen
   # with its `❯` row gone has no composer to prove.
   screen=$(printf '%s\n' "$idle" | grep -v '^❯')
