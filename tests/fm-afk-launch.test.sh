@@ -257,7 +257,8 @@ unit_stop_archives_the_record_last() {
 
 # ---------------------------------------------------------------------------
 # UNIT 1: fm_afk_clear_stale_artifacts removes exactly the four delivery
-# artifacts plus the prior session's five per-task marker families.
+# artifacts, the prior session's five per-task marker families, and the
+# watcher's stale hand-off markers.
 # ---------------------------------------------------------------------------
 unit_clear_stale() {
   local st
@@ -274,6 +275,8 @@ unit_clear_stale() {
   : > "$st/state/.subsuper-pause-until-due-task1"
   : > "$st/state/.subsuper-seen-status-task1"  # classification position must be kept
   : > "$st/state/.wake-queue"          # durable queue must be untouched
+  : > "$st/state/.stale-v3.k1"         # watcher stale hand-off: cleared
+  : > "$st/state/.stale-since-v3.k1"   # watcher wedge timer: kept
   # Source fm-afk-start.sh inside a child bash (it sets `set -eu` and would
   # otherwise leak that into this test shell) and call the clear helper.
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
@@ -304,6 +307,11 @@ unit_clear_stale() {
     pass "clear-stale: leaves the durable wake-queue intact (no pending work dropped)"
   else
     fail "clear-stale: removed the durable wake-queue"
+  fi
+  if [ ! -e "$st/state/.stale-v3.k1" ] && [ -e "$st/state/.stale-since-v3.k1" ]; then
+    pass "clear-stale: forgets the watcher's stale hand-off and keeps its wedge timer"
+  else
+    fail "clear-stale: watcher stale markers were not cleared as expected"
   fi
   rm -rf "$st"
 }

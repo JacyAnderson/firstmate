@@ -50,6 +50,8 @@ fm_afk_start_usage() {
 # timing is what proves these caches and episode clocks belong to a prior session.
 # Durable wake-queue rows and classification positions must remain intact for
 # replay and catch-all reconciliation by bin/fm-supervise-daemon.sh.
+# Watcher .stale-<window-key> hand-off markers go too, or a pane idle since the
+# prior session never sends the new daemon a stale wake.
 # .agents/skills/afk/SKILL.md "Stale-artifact lifecycle" owns the session contract.
 fm_afk_clear_stale_artifacts() {  # <state-dir>
   local state=$1
@@ -61,7 +63,8 @@ fm_afk_clear_stale_artifacts() {  # <state-dir>
         "$state"/.subsuper-reported-stale-* \
         "$state"/.subsuper-dialog-* \
         "$state"/.subsuper-paused-* \
-        "$state"/.subsuper-pause-until-due-* 2>/dev/null
+        "$state"/.subsuper-pause-until-due-* \
+        "$state"/.stale-v3.* 2>/dev/null
 }
 
 daemon_lock_owner() {
