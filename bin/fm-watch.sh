@@ -2432,13 +2432,15 @@ busy_stream_snapshot_current() {  # <task> <observed snapshot>
 
 # 0 when an unchanged paused declaration with no usable declared time is due its
 # recheck and config/paused-recheck-silent says to run it without a wake: the
-# agent is confirmed alive and no decision is open. Advances the throttle marker.
+# agent is confirmed alive, no decision is open, and the capture shows no
+# blocking dialog the worker cannot report from. Advances the throttle marker.
 # The cheap age and marker reads run first, so the backend probe and the status
 # fold happen only when silence would replace a wake.
-paused_recheck_silent() {  # <window> <statusf> <key> <declaration> <status-age>
-  local win=$1 statusf=$2 key=$3 declaration=$4 age=$5 marker
+paused_recheck_silent() {  # <window> <statusf> <key> <declaration> <status-age> [dialog-name]
+  local win=$1 statusf=$2 key=$3 declaration=$4 age=$5 dialog=${6-} marker
   marker="$STATE/.paused-resurfaced-$key"
   [ -e "$CONFIG/paused-recheck-silent" ] \
+    && [ -z "$dialog" ] \
     && [ "$age" -ge "$PAUSE_RESURFACE_SECS" ] \
     && [ "$(cat "$marker" 2>/dev/null || true)" = "$declaration" ] \
     && [ "$(age_of "$marker")" -ge "$PAUSE_RESURFACE_SECS" ] \
@@ -2465,8 +2467,8 @@ paused_recheck_silent() {  # <window> <statusf> <key> <declaration> <status-age>
 # captain themself for a verified hold. Only the captain-held verb takes the second
 # wording; a caller that reached the bounded cadence off pause tracking alone, with
 # no declaring verb left on the log, keeps the external-wait wording it always had.
-handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age detail reason declaration last until now min_age rc snapshot pause_age silent=0
+handle_paused_stale() {  # <window> <task> <hash> [dialog-name]
+  local win=$1 task=$2 h=$3 dialog=${4-} key statusf mtime age detail reason declaration last until now min_age rc snapshot pause_age silent=0
   key=$(window_key "$win")
   pause_overdue_reconcile "$task" "$STATE/$task.status"; rc=$?
   if [ "$rc" -eq 0 ]; then
@@ -2520,7 +2522,7 @@ handle_paused_stale() {  # <window> <task> <hash>
     silent=1
     reason="paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds"
   fi
-  if [ "$silent" = 1 ] && paused_recheck_silent "$win" "$statusf" "$key" "$declaration" "$age"; then
+  if [ "$silent" = 1 ] && paused_recheck_silent "$win" "$statusf" "$key" "$declaration" "$age" "$dialog"; then
     triage_log "absorbed stale (${detail}, unchanged declaration rechecked without a wake, age ${age}s): $win"
     return 0
   fi
@@ -2600,7 +2602,7 @@ busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-fil
       fi
       return 0
     fi
-    handle_paused_stale "$win" "$task" "$h"
+    handle_paused_stale "$win" "$task" "$h" "$dialog"
     return 0
   fi
   stream_episode="$STATE/.model-stream-episode-$(window_key "$win")"
@@ -3055,7 +3057,7 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
       mtime=$(stat_mtime "$STATE/$task.status")
       case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
       paused_recheck_silent "$win" "$STATE/$task.status" "$key" "$STALE_WAIT_DECLARATION" \
-        "$(( $(date +%s) - mtime ))" && throttled=0
+        "$(( $(date +%s) - mtime ))" "$dialog" && throttled=0
     fi
   elif status_is_captain_held "$last"; then
     declared=0
@@ -4531,7 +4533,7 @@ EOF
         # firstmate. Detection itself is unchanged from above.
         if [ "$kind" = secondmate ]; then
           case "$(pause_state_class "$w" "$task")" in
-            paused) handle_paused_stale "$w" "$task" "$h" ;;
+            paused) handle_paused_stale "$w" "$task" "$h" "$dialog" ;;
             *)      clear_pause_tracking "$key" ;;
           esac
         elif afk_present; then
@@ -4653,7 +4655,7 @@ EOF
                 triage_log "absorbed non-terminal stale (provably working): $w"
                 ;;
               paused)
-                handle_paused_stale "$w" "$task" "$h"
+                handle_paused_stale "$w" "$task" "$h" "$dialog"
                 ;;
               *)
                 surface_nonterminal_stale "$w" "$h" "$dialog"
@@ -4663,12 +4665,12 @@ EOF
             task=$(window_to_task "$w" "$STATE")
             if [ -e "$pf" ] || status_is_paused_or_captain_held "$(status_declared_wait_line "$STATE/$task.status")"; then
               case "$(pause_state_class "$w" "$task")" in
-                paused)  handle_paused_stale "$w" "$task" "$h" ;;
+                paused)  handle_paused_stale "$w" "$task" "$h" "$dialog" ;;
                 working) clear_pause_state "$key"
                          printf '%s' "$h" > "$sf"
                          wedge_timer_check "$w" "$ssf" "non-terminal stale (provably working after a declared pause)" "$ewf" "$task" "$h" "$dialog"
                          triage_log "absorbed non-terminal stale (provably working): $w" ;;
-                *)       handle_paused_stale "$w" "$task" "$h" ;;
+                *)       handle_paused_stale "$w" "$task" "$h" "$dialog" ;;
               esac
             else
               wedge_timer_check "$w" "$ssf" "non-terminal stale" "$ewf" "$task" "$h" "$dialog"
@@ -4712,7 +4714,7 @@ EOF
       task=$(window_to_task "$w" "$STATE")
       if ! afk_present && status_is_paused_or_captain_held "$(status_declared_wait_line "$STATE/$task.status")" && [ "$busy_now" -ne 0 ]; then
         case "$(pause_state_class "$w" "$task")" in
-          paused) handle_paused_stale "$w" "$task" "$h" ;;
+          paused) handle_paused_stale "$w" "$task" "$h" "$dialog" ;;
           # Inconclusive, but the declared wait itself still stands, so only the
           # per-hash bookkeeping resets. The re-surface throttle bounds the
           # DECLARATION, not the pane hash: an idle parked pane whose display

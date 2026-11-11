@@ -1750,6 +1750,29 @@ test_silent_recheck_flag_on_wakes_when_the_agent_exited() {
   pass "with paused-recheck-silent on, a paused recheck for an exited agent still wakes"
 }
 
+# A worker parked on a blocking dialog cannot append the status line that would
+# end its pause, so a recognised dialog wakes on both the live-agent and the
+# secondmate recheck paths even when the declaration is unchanged.
+test_silent_recheck_flag_on_wakes_for_a_blocking_dialog() {
+  local dir state kind picker
+  picker=$(printf '%s\n' 'Background work is running' 'shell · sleep 300' \
+    '❯ 1. Exit and stop tasks' '  2. Stay' 'Enter to confirm · Esc to cancel')
+  for kind in ship secondmate; do
+    dir=$(silent_recheck_case "silent-dialog-$kind" on 'paused: waiting on the vendor reply'); state="$dir/state"
+    [ "$kind" = secondmate ] || printf 'window=test:fm-until\nkind=ship\nharness=claude\nbackend=tmux\n' > "$state/until.meta"
+    printf '%s\n' "$picker" > "$dir/pane.txt"
+    printf '%s' "$(hash_text "$picker")" > "$state/.hash-$(watch_window_key test:fm-until)"
+    FM_FAKE_TMUX_CURRENT_COMMAND=claude until_watch "$dir" 240
+    wait_for_exit "$UNTIL_PID" 100 || { reap "$UNTIL_PID"; fail "a $kind parked on the exit picker was rechecked without a wake"; }
+    grep -F 'stale: test:fm-until' "$dir/watch.out" >/dev/null || fail "the $kind exit-picker recheck did not wake: $(cat "$dir/watch.out")"
+    if [ "$kind" = ship ]; then
+      grep -F 'blocked-on-prompt: Claude background-task exit picker' "$dir/watch.out" >/dev/null \
+        || fail "the live-agent exit-picker wake did not name the dialog: $(cat "$dir/watch.out")"
+    fi
+  done
+  pass "with paused-recheck-silent on, a pane parked on a blocking dialog still wakes"
+}
+
 test_silent_recheck_flag_on_wakes_when_declared_time_is_due() {
   local dir state
   dir=$(silent_recheck_fixture silent-due "$(( $(date +%s) - 30 ))" 500); state="$dir/state"
@@ -1913,6 +1936,7 @@ fm_test_run \
   test_silent_recheck_flag_on_wakes_for_a_changed_declaration \
   test_silent_recheck_flag_on_absorbs_unchanged_pause_for_a_live_ship_agent \
   test_silent_recheck_flag_on_absorbs_a_ticking_pane_for_a_live_ship_agent \
+  test_silent_recheck_flag_on_wakes_for_a_blocking_dialog \
   test_silent_recheck_flag_on_wakes_when_the_agent_exited \
   test_silent_recheck_flag_on_wakes_when_declared_time_is_due \
   test_paused_bg_job_without_until_stays_silent_after_the_job_ends \
