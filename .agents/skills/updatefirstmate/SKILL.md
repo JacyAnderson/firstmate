@@ -1,7 +1,7 @@
 ---
 name: updatefirstmate
 description: >-
-  Self-update a running firstmate and its secondmates to the latest from origin.
+  Self-update a running firstmate and its secondmates to the latest from origin, or from a configured self-update source.
   Use when the captain invokes /updatefirstmate (e.g. "/updatefirstmate", "update firstmate", "pull the latest firstmate").
   Also use when the captain asks to pull, sync, or merge upstream firstmate changes into this fork; its Upstream sync section owns that routine.
 user-invocable: true
@@ -28,6 +28,7 @@ The only live mates that do not restart are the ones whose home the update pass 
 
 **One-time rollout note:** the update that carries this change is still executed by the previous release, which restarts only the mates whose `AGENTS.md` or `.agents/skills/` moved on that pass. After it completes, run `bin/fm-secondmate-restart.sh <fm-id>...` once with every live second mate ID, not only the ones that release named; later updates follow the normal flow below.
 
+The source is `origin` unless this home has `config/self-update-source`, which names one remote branch for the primary to follow instead, with local secondmates following the primary's resulting commit; [`docs/configuration.md`](../../../docs/configuration.md#self-update-source-configself-update-source) owns that contract, including its remote-secondmate limit.
 The primary update is fast-forward only, while each secondmate uses the same guarded convergence path plus one narrow recovery for squash-merged local history.
 For a remote route, it updates the configured Firstmate code root on that host from its own origin, then guardedly fast-forwards the persistent home to that code-root commit.
 It never forces, never creates a merge commit, and never stashes.
@@ -42,7 +43,8 @@ This touches only the firstmate repo and its own worktrees, never anything under
    ```sh
    bin/fm-update.sh
    ```
-   It fast-forwards this firstmate repo's default branch from origin, then updates every registered local or remote secondmate home through its placement-specific guarded path.
+   It fast-forwards this firstmate repo's default branch from origin, or from the configured self-update source, then updates every registered local or remote secondmate home through its placement-specific guarded path.
+   When a source is configured it prints a `self-update source:` line first, and an unusable config file stops the whole update before anything moves; report that file to the captain rather than editing or removing it.
    It prints one status line per target (`updated <old>..<new>` / `reconciled redundant divergence <old>..<new>` / `already current` / `skipped: <reason>`), followed by three action lines that tell you exactly what to do next:
    - `reread-firstmate: yes|no`
    - `restart-secondmates: fm-<id>...|none`
@@ -126,7 +128,7 @@ The update above only fast-forwards from origin, so upstream changes reach the f
    - resolve each conflict and check each both-sides file for a fork change upstream now supersedes or silently undoes, then carry each fork change onto upstream's structure or drop it where upstream covers it;
    - route any upstream `fm/` default back to `FM_DEFAULT_BRANCH_PREFIX` in `bin/fm-branch-prefix-lib.sh`, and add a `hotspot_note` entry for any new conflict that will recur;
    - when the merge stopped on conflicts (exit 1), finish it with `git commit --no-edit` once they are resolved, so the merge keeps upstream's tip as its second parent; a clean merge (exit 0) is already committed;
-   - write the PR description as the earlier syncs did (JacyAnderson/firstmate PR #17): the upstream fixes that matter to this fleet, each fork change and whether it was carried, adapted, or dropped as superseded, and Conflict notes naming each conflicting file, what each side changed, and the resolution.
+   - write the PR description as the earlier syncs did (most recently JacyAnderson/firstmate PR #21): the upstream fixes that matter to this fleet, each fork change and whether it was carried, adapted, or dropped as superseded, and Conflict notes naming each conflicting file, what each side changed, and the resolution.
 3. **Land it with a merge commit.**
    When the captain approves the merge, pass `-- --merge` to `bin/fm-pr-merge.sh`.
    Its GitHub default is a squash, which would drop upstream's history from the fork and make the next sync conflict on every change again.
