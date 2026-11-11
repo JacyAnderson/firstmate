@@ -352,7 +352,26 @@ test_composer_footer_zone_refuses_rather_than_allows() {
     [ "$out" != empty ] \
       || fail "a working agent below a proven envelope must never read empty under LC_ALL=C, got '$out'"
   done
-  # 3. The other direction, which the demotion must not invert either: a pair
+  # 3. Draft hidden by a lower foreign glyph. An unclaimed row ends the zone
+  #    with a lone or dim foreign glyph still below it in the same run, which
+  #    may be the envelope's furniture, so the drafted envelope above refuses
+  #    and nothing is extracted as its content.
+  local dim envelope footer
+  dim=$'\033[2mrepo main\033[0m'
+  for envelope in \
+    $'╭───────────────────────────╮\n│ ❯ fix the login bug       │\n╰───────────────────────────╯' \
+    $'────────────────────────\n❯ fix the login bug\n────────────────────────'; do
+    for footer in $'context · 50%/272K\n→' $'context · ◫ 50%/1M\n→' $'Working on request...\n→' \
+      $'context · 50%/272K\n→ '"$dim"; do
+      screen="$envelope"$'\n'"$footer"
+      assert_screen "a foreign glyph under an unclaimed footer row refuses" unknown "$CAPS_STYLED" "$screen"
+      assert_screen "a foreign glyph under an unclaimed footer row refuses on a plain capture" unknown "$CAPS_PLAIN" "$screen"
+      if out=$(fm_composer_extract_selected_content "$CAPS_STYLED" "$screen"); then
+        fail "extraction must not report content under an unclaimed footer row, got '$out'"
+      fi
+    done
+  done
+  # 4. The other direction, which the demotion must not invert either: a pair
   #    holding a QUOTED prompt in the transcript above a live, visibly empty
   #    composer row reads empty, and the quoted text is never composer content.
   screen=$'────────────────────────\ntranscript one\ntranscript two\n❯ some quoted prompt in the transcript\n────────────────────────\n❯'"$NBSP"
