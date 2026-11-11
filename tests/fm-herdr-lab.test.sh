@@ -6,10 +6,14 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 unset FM_HERDR_LAB_FLEET_SESSION
-export HOME=/home/test
 unset XDG_CONFIG_HOME
 
 TMP_ROOT=$(fm_test_tmproot fm-herdr-lab)
+# A short HOME keeps generated lab socket paths under the sun_path limit. It must
+# exist: on macOS a missing /home path goes through the automounter on every
+# lookup, which slows the provision poll loop past its timeout.
+HOME=$(TMPDIR=/tmp fm_test_tmproot fmhl) || exit 1
+export HOME
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
 FAKE_STATE="$TMP_ROOT/herdr-state"
 FAKE_LOG="$TMP_ROOT/herdr.log"
