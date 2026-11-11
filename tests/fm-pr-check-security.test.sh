@@ -1490,7 +1490,7 @@ test_static_poll_contract() {
   dir=$(make_case poll-contract)
   make_poll_fixture "$dir"
 
-  for state in OPEN CLOSED EMPTY MALFORMED; do
+  for state in OPEN EMPTY MALFORMED; do
     case "$state" in
       EMPTY) value= ;;
       MALFORMED) value='not-a-state' ;;
@@ -1501,6 +1501,8 @@ test_static_poll_contract() {
   done
   out=$(FM_TEST_GH_STATE=MERGED run_poll "$dir")
   [ "$out" = merged ] || fail "static poll did not emit exactly one merged line"
+  out=$(FM_TEST_GH_STATE=CLOSED run_poll "$dir")
+  [ "$out" = closed ] || fail "static poll did not emit exactly one closed line for a closed GitHub PR"
   out=$(FM_TEST_GH_FAIL=1 run_poll "$dir")
   [ -z "$out" ] || fail "static poll emitted after gh failure"
 
@@ -1537,6 +1539,24 @@ test_static_poll_contract() {
   [ "$rc" -eq 0 ] || fail "watcher did not surface merged poll"
   [ "$(grep -c '^check: .*: merged$' "$dir/watch.out")" -eq 1 ] || fail "watcher did not convert merged output into exactly one wake"
   pass "static poll is silent except for one merged line and remains watcher-bounded"
+}
+
+test_closed_poll_wakes_once_and_retires() {
+  local dir rc
+  dir=$(make_case closed-poll-retire)
+  write_poll_meta "$dir/home/state" task-a https://github.com/o/r/pull/1
+  fm_pr_poll_prepare "$dir/home/state" task-a github https://github.com/o/r/pull/1 github.com o/r 1 "$POLL" \
+    || fail "could not prepare authenticated watcher poll"
+  fm_pr_poll_publish_prepared || fail "could not publish authenticated watcher poll"
+  rm -f "$dir/home/state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "watcher did not surface closed poll: $(cat "$dir/watch.err")"
+  [ "$(grep -c '^check: .*: closed$' "$dir/watch.out")" -eq 1 ] || fail "watcher did not convert closed output into exactly one wake"
+  assert_poll_absent "$dir/home/state" task-a
+  pass "a closed unmerged PR wakes once and retires its poll"
 }
 
 test_comment_watch_github() {
@@ -1682,6 +1702,8 @@ test_comment_watch_gitlab() {
     || fail "a missing comments field changed the watermark"
   out=$(FM_TEST_GLAB_STATE=merged FM_TEST_GLAB_COMMENTS=9 run_poll "$dir")
   [ "$out" = merged ] || fail "GitLab merge detection changed with comment detection active"
+  out=$(FM_TEST_GLAB_STATE=closed FM_TEST_GLAB_COMMENTS=9 run_poll "$dir")
+  [ "$out" = closed ] || fail "GitLab closed detection changed with comment detection active: $out"
   pass "GitLab comment watch wakes on note-count increase and degrades to merge-only"
 }
 
@@ -1915,7 +1937,7 @@ test_github_degraded_poll() {
   out=$(FM_TEST_GH_POLL_STATE=MERGED FM_TEST_GH_ROLLUP='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"FAILURE"}]' run_poll "$dir")
   [ "$out" = merged ] || fail "GitHub poll did not keep the merged wake unchanged"
   out=$(FM_TEST_GH_POLL_STATE=CLOSED FM_TEST_GH_ROLLUP='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"FAILURE"}]' run_poll "$dir")
-  [ -z "$out" ] || fail "GitHub poll emitted a degraded line for a closed pull request"
+  [ "$out" = closed ] || fail "GitHub poll emitted more than the closed line for a closed pull request: $out"
   out=$(FM_TEST_GH_HEAD=not-a-head FM_TEST_GH_ROLLUP='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"FAILURE"}]' run_poll "$dir")
   [ -z "$out" ] || fail "GitHub poll emitted a degraded line for an unreadable head"
   out=$(FM_TEST_GH_FAIL=1 run_poll "$dir")
@@ -3523,21 +3545,23 @@ gitlab.example
 group/subgroup/project
 7" ] || fail "published GitLab sidecar bytes were not exact"
 
-  # Only an exact merged state wakes firstmate. Every other reading, including
-  # an unreadable merge request and a changed output format, stays silent.
-  for value in opened closed locked '' not-a-state MERGED merged-but-not; do
+  # Only an exact merged or closed state wakes firstmate. Every other reading,
+  # including an unreadable merge request and a changed output format, stays silent.
+  for value in opened locked '' not-a-state MERGED merged-but-not; do
     out=$(FM_TEST_GLAB_STATE="$value" run_poll "$dir")
     [ -z "$out" ] || fail "GitLab poll emitted for a non-merged state"
   done
   out=$(FM_TEST_GLAB_STATE=merged run_poll "$dir")
   [ "$out" = merged ] || fail "GitLab poll did not emit exactly one merged line"
+  out=$(FM_TEST_GLAB_STATE=closed run_poll "$dir")
+  [ "$out" = closed ] || fail "GitLab poll did not emit exactly one closed line"
   out=$(FM_TEST_GLAB_FAIL=1 run_poll "$dir")
   [ -z "$out" ] || fail "GitLab poll emitted after a glab failure"
 
   # A still-open merge request whose head pipeline failed is the readable
   # trace of a merge train dropping it, and emits exactly one degraded line
-  # naming the pipeline and its URL. A green or pending head pipeline, a
-  # closed merge request, and a pipeline without a readable id all stay
+  # naming the pipeline and its URL. A green or pending head pipeline
+  # and a pipeline without a readable id all stay
   # silent.
   out=$(FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_PIPELINE=failed run_poll "$dir")
   [ "$out" = 'degraded pipeline=941 url=https://gitlab.example/group/subgroup/project/-/pipelines/941' ] || fail "GitLab poll did not emit exactly one degraded line for a failed head pipeline: $out"
@@ -3675,7 +3699,7 @@ EOF
     [ -z "$out" ] || fail "GitLab poll emitted for a non-failed head pipeline"
   done
   out=$(FM_TEST_GLAB_STATE=closed FM_TEST_GLAB_PIPELINE=failed run_poll "$dir")
-  [ -z "$out" ] || fail "GitLab poll emitted a degraded line for a closed merge request"
+  [ "$out" = closed ] || fail "GitLab poll emitted more than the closed line for a closed merge request: $out"
   out=$(FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_PIPELINE=failed FM_TEST_GLAB_PIPELINE_ID=0 run_poll "$dir")
   [ -z "$out" ] || fail "GitLab poll emitted a degraded line for a pipeline without a readable id"
 
@@ -3714,7 +3738,7 @@ EOF
     || fail "the missing-car path did not make exactly one bounded MR-state recheck"
   rm -f "$dir/glab.log.train"
   out=$(FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_STATE_AFTER=closed FM_TEST_GLAB_TRAIN=gone run_poll "$dir")
-  [ -z "$out" ] || fail "a closed MR recheck was reported as a train drop: $out"
+  [ "$out" = closed ] || fail "a closed MR recheck was not reported as closed alone: $out"
   rm -f "$dir/glab.log.train"
   out=$(FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_RECHECK_FAIL=1 FM_TEST_GLAB_TRAIN=gone run_poll "$dir")
   [ "$out" = "degraded train=dropped url=$url reason=mergeable pipeline_url=https://gitlab.example/group/subgroup/project/-/pipelines/941 mr_state=unconfirmed" ] \
@@ -3725,7 +3749,7 @@ EOF
   out=$(FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_TRAIN=neterr run_poll "$dir")
   [ -z "$out" ] || fail "GitLab poll read a transport error mentioning 404 as a train drop: $out"
   out=$(FM_TEST_GLAB_STATE=closed FM_TEST_GLAB_TRAIN=gone run_poll "$dir")
-  [ -z "$out" ] || fail "GitLab poll reported a train drop for a closed merge request"
+  [ "$out" = closed ] || fail "GitLab poll reported a train drop for a closed merge request: $out"
   out=$(FM_TEST_GLAB_STATE=opened FM_TEST_GLAB_PIPELINE=failed FM_TEST_GLAB_TRAIN=gone run_poll "$dir")
   case $out in
     'degraded pipeline=941 '*) ;;
@@ -4399,15 +4423,12 @@ test_external_merge_transition_retires_only_terminal_poll() {
   add_stop_custom_check "$dir"
   before=$(poll_artifact_snapshot "$state" task-a)
 
-  for label in open-green open-red closed-unmerged forge-error malformed; do
+  for label in open-green open-red forge-error malformed; do
     rm -f "$state/.last-check"
     set +e
     case "$label" in
       open-green|open-red)
         FM_TEST_GH_STATE=OPEN run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/$label.out" 2> "$dir/$label.err"
-        ;;
-      closed-unmerged)
-        FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/$label.out" 2> "$dir/$label.err"
         ;;
       forge-error)
         FM_TEST_GH_FAIL=1 run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/$label.out" 2> "$dir/$label.err"
@@ -4432,7 +4453,7 @@ test_external_merge_transition_retires_only_terminal_poll() {
   [ "$rc" -eq 0 ] || fail "external merged transition failed: $(cat "$dir/merged.err")"
   case "$(cat "$dir/merged.out")" in check:*task-a.check.sh:*merged) ;; *) fail "external merge did not preserve its notification" ;; esac
   assert_poll_absent "$state" task-a
-  pass "open/red, closed-unmerged, malformed, and forge errors remain armed until an exact merged transition"
+  pass "open/red, malformed, and forge errors remain armed until an exact merged transition"
 }
 
 test_retirement_refuses_replacement_and_nonterminal_results() {
@@ -4452,7 +4473,7 @@ test_retirement_refuses_replacement_and_nonterminal_results() {
   fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "replacement poll was not left canonical"
 
   fm_pr_poll_snapshot_capture "$state" task-a "$POLL" || fail "could not snapshot nonterminal fixture"
-  for result in OPEN CLOSED ERROR 'merged extra'; do
+  for result in OPEN ERROR 'merged extra' 'closed extra'; do
     fm_pr_poll_retirement_publish "$state" task-a "$POLL" "$result" \
       && fail "nonterminal result '$result' received retirement authority"
   done
@@ -5346,6 +5367,7 @@ test_watcher_sweep_records_a_reported_pr
 test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
+test_closed_poll_wakes_once_and_retires
 test_comment_watch_github
 test_comment_watch_gitlab
 test_comment_watch_watcher_and_rearm
