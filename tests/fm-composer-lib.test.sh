@@ -352,25 +352,35 @@ test_composer_footer_zone_refuses_rather_than_allows() {
     [ "$out" != empty ] \
       || fail "a working agent below a proven envelope must never read empty under LC_ALL=C, got '$out'"
   done
-  # 3. Draft hidden by a lower foreign glyph. An unclaimed row ends the zone
-  #    with a lone or dim foreign glyph still below it in the same run, which
-  #    may be the envelope's furniture, so the drafted envelope above refuses
-  #    and nothing is extracted as its content.
-  local dim envelope footer
-  dim=$'\033[2mrepo main\033[0m'
+  # 3. A context-cell row under a drafted envelope is footer furniture in
+  #    either order, so a lone or dim foreign glyph beside it stays demoted
+  #    and the envelope's draft is still the composer content.
+  local dim envelope footer plain_want
+  dim=$'\033[2m'
   for envelope in \
     $'╭───────────────────────────╮\n│ ❯ fix the login bug       │\n╰───────────────────────────╯' \
     $'────────────────────────\n❯ fix the login bug\n────────────────────────'; do
-    for footer in $'context · 50%/272K\n→' $'context · ◫ 50%/1M\n→' $'Working on request...\n→' \
-      $'context · 50%/272K\n→ '"$dim"; do
+    plain_want=pending
+    case "$envelope" in '─'*) plain_want=unknown ;; esac
+    for footer in $'context · 50%/272K\n→' $'context · ◫ 50%/1M\n→' $'→\ncontext · 50%/272K' \
+      $'→\n'"$dim"$'context · 50%/272K\033[0m' $'→\n'"$dim"$'context · ◫ 50%/1M\033[0m' \
+      $'context · 50%/272K\n→ '"$dim"$'repo main\033[0m'; do
       screen="$envelope"$'\n'"$footer"
-      assert_screen "a foreign glyph under an unclaimed footer row refuses" unknown "$CAPS_STYLED" "$screen"
-      assert_screen "a foreign glyph under an unclaimed footer row refuses on a plain capture" unknown "$CAPS_PLAIN" "$screen"
-      if out=$(fm_composer_extract_selected_content "$CAPS_STYLED" "$screen"); then
-        fail "extraction must not report content under an unclaimed footer row, got '$out'"
-      fi
+      assert_screen "a drafted envelope over a context footer" pending "$CAPS_STYLED_NOID" "$screen"
+      assert_screen "a drafted envelope over a context footer on a plain capture" "$plain_want" "$CAPS_PLAIN" "$screen"
+      out=$(set -u; fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen") \
+        || fail "extraction under a context footer must succeed"
+      [ "$out" = 'fix the login bug' ] \
+        || fail "extraction under a context footer must keep the draft, got '$out'"
     done
   done
+  # A quoted foreign-glyph box in the transcript still leaves a lower composer
+  # with its own structural proof readable.
+  screen=$'╭───────────────────────────╮\n│ › command example         │\n╰───────────────────────────╯\n─────────────────────── Andrew ─\n❯\n────────────────────────────────\n ⏵⏵ auto mode on'
+  assert_screen "a named composer below a quoted foreign box" empty "$CAPS_STYLED_NOID" "$screen"
+  assert_screen "a named composer below a quoted foreign box on a plain capture" empty "$CAPS_PLAIN" "$screen"
+  screen=$'╭───────────────────────────╮\n│ › command example         │\n╰───────────────────────────╯\nExample finished.\n❯\n π · ◑ Opus 5.5 · ◫ 53.9%/1M'
+  assert_screen "a bare omp composer below a quoted foreign box" empty "$CAPS_STYLED" "$screen"
   # 4. The other direction, which the demotion must not invert either: a pair
   #    holding a QUOTED prompt in the transcript above a live, visibly empty
   #    composer row reads empty, and the quoted text is never composer content.

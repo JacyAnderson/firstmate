@@ -680,9 +680,13 @@ FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
 # could only ever match typed text), or when it opens with one of omp's spinner
 # frames then an elapsed cell. It is consulted only as the boundary BELOW a
 # bare composer, never on the composer row itself. A context cell alone
-# (`◫ 53.9%/1M`) proves nothing, because a wrapped draft can carry the same
-# text, so a status row that opens with a focused subagent's id stays input.
+# (`◫ 53.9%/1M`) proves nothing there, because a wrapped draft can carry the
+# same text, so a status row that opens with a focused subagent's id stays input.
 FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)'
+# Below a proven envelope a context-cell row still counts as footer furniture
+# (_fm_composer_row_is_composer_furniture): demoting the rows under an envelope
+# only keeps that envelope selected, so it can refuse but never read a draft out.
+FM_COMPOSER_OMP_CONTEXT_RE_DEFAULT='[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+(\.[0-9]+)?[KM]'
 # Pi's footer stats row opens at column 0 with the session cost when every
 # token counter is zero (`$0.000 (sub) 5.4%/272k (auto)` on pi 0.85.1).
 # That leading `$` is a cost cell, not a dead-shell prompt, only when a digit
@@ -1872,6 +1876,7 @@ _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
   local row=$1 proof=$2 glyph=''
   [ -n "$row" ] || return 1
   _fm_composer_row_is_omp_status "$row" && return 0
+  fm_composer_idle_matches "$row" "$FM_COMPOSER_OMP_CONTEXT_RE_DEFAULT" sensitive && return 0
   _fm_composer_row_is_braille_furniture "$row" && return 0
   fm_composer_idle_matches "$row" \
     "${FM_COMPOSER_MODE_HINT_RE:-$FM_COMPOSER_MODE_HINT_RE_DEFAULT}" sensitive && return 0
@@ -1894,29 +1899,11 @@ _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
 # the one verdict that authorizes fm-send to type into the pane. Returns 1 too
 # when no envelope is glyph-proven, when a blank row sits directly beneath it,
 # or when the run holds no bare candidate at all (nothing to demote).
-# _fm_composer_footer_run_holds_foreign_bare: 0 when the bare candidate sits in
-# the unbroken non-blank run that starts at <row> below a proven envelope and
-# leads with a glyph other than <proof-glyph>. An unclaimed row ended the
-# footer zone there, so that candidate may still be the envelope's furniture,
-# and selecting it could read `empty` over a draft the envelope holds.
-_fm_composer_footer_run_holds_foreign_bare() {  # <plain> <row> <proof-glyph>
-  local plain=$1 row=$2 proof=$3 trimmed glyph=''
-  while [ "$row" -le "$FM_COMPOSER_SCAN_BARE_ROW" ]; do
-    trimmed=$(_fm_composer_screen_row "$row" "$plain")
-    fm_composer_normalize_trim_var trimmed
-    [ -n "$trimmed" ] || return 1
-    row=$((row + 1))
-  done
-  fm_composer_leading_agent_glyph_var glyph "$trimmed" || return 1
-  [ -n "$proof" ] && [ "$glyph" != "$proof" ]
-}
-
 _fm_composer_locate_footer_zone() {  # <plain>
   local plain=$1 close next trimmed proof=''
   FM_COMPOSER_FOOTER_AFTER=-1
   FM_COMPOSER_FOOTER_GLYPH=-1
   FM_COMPOSER_FOOTER_LAST=-1
-  FM_COMPOSER_FOOTER_REFUSE=0
   if [ "$FM_COMPOSER_SCAN_BOX_BOTTOM" -gt "$FM_COMPOSER_FOOTER_AFTER" ] \
      && [ "$FM_COMPOSER_SCAN_BOX_GLYPH_ROW" -ge 0 ]; then
     FM_COMPOSER_FOOTER_AFTER=$FM_COMPOSER_SCAN_BOX_BOTTOM
@@ -1953,11 +1940,7 @@ _fm_composer_locate_footer_zone() {  # <plain>
     trimmed=$(_fm_composer_screen_row "$next" "$plain")
     fm_composer_normalize_trim_var trimmed
     [ -n "$trimmed" ] || break
-    if ! _fm_composer_row_is_composer_furniture "$trimmed" "$proof"; then
-      _fm_composer_footer_run_holds_foreign_bare "$plain" "$next" "$proof" \
-        && FM_COMPOSER_FOOTER_REFUSE=1
-      return 1
-    fi
+    _fm_composer_row_is_composer_furniture "$trimmed" "$proof" || return 1
     FM_COMPOSER_FOOTER_LAST=$next
     next=$((next + 1))
   done
@@ -2033,10 +2016,6 @@ _fm_composer_select_cursorless() {  # <plain-screen> <screen> <styled>
   FM_COMPOSER_SELECTED_LAST=-1
   FM_COMPOSER_SELECTED_AMBIG=0
   if _fm_composer_locate_footer_zone "$plain"; then footer=1; fi
-  if [ "$FM_COMPOSER_FOOTER_REFUSE" = 1 ]; then
-    FM_COMPOSER_SELECTED_KIND=
-    return 1
-  fi
   if [ "$FM_COMPOSER_SCAN_BOX_BOTTOM" -ge 0 ]; then
     generic=$FM_COMPOSER_SCAN_BOX_BOTTOM
     FM_COMPOSER_SELECTED_KIND=box
