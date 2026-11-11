@@ -275,9 +275,8 @@ remote_inherit_failure_reason() { # <output>
 # Print the first thing that makes <dir> unsafe to fast-forward, or nothing.
 # Without <base> any porcelain line counts. With <base>, only tracked changes and
 # untracked leaf paths that equal, sit under, or contain a path in HEAD..<base>
-# count; the latter print as "?? <shell-quoted path>". Paths stay NUL-delimited
-# and are compared as literal strings, never through awk or status display
-# settings.
+# count, printed as "?? <shell-quoted path>". Paths stay NUL-delimited and are
+# compared as literal strings, independent of status display settings.
 dirty_status() {
   local dir=$1 ignore_seed_marker=${2:-no} base=${3:-} line incoming=() untracked=() path i u
   if [ -z "$base" ]; then

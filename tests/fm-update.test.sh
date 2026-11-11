@@ -428,7 +428,7 @@ test_untracked_dirt_tolerated_unless_colliding() {
   if [ -e "$w/sm1/Case.txt" ]; then
     out=$(run_update "$w")
     assert_contains "$out" "fast-forward failed" "a case-only collision is refused"
-    assert_contains "$out" "(case.txt)" "git's offending path is kept in the message"
+    assert_contains "$out" "(Case.txt)" "git's offending path is kept in the message"
   fi
 
   w=$(new_world t4b-shadow)
