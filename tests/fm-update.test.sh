@@ -318,6 +318,96 @@ test_dirty_secondmate_skipped() {
   pass "T4 dirty secondmate skipped, local edit preserved"
 }
 
+# --- T4b: untracked dirt only blocks the update when it collides ------------
+# Advance origin by one commit that adds tracked paths: a file, a file under a
+# directory, and a file that a local untracked directory/file can shadow.
+bump_origin_adding() {
+  local w=$1 path
+  git -C "$w/seed" pull -q origin main >/dev/null 2>&1 || true
+  shift
+  for path in "$@"; do
+    mkdir -p "$w/seed/$(dirname "$path")"
+    printf 'incoming\n' > "$w/seed/$path"
+  done
+  printf 'r-add\n' >> "$w/seed/README.md"
+  git -C "$w/seed" add -A
+  git -C "$w/seed" commit -qm bump-add
+  git -C "$w/seed" push -q origin main
+}
+
+test_untracked_dirt_tolerated_unless_colliding() {
+  local w out before
+
+  w=$(new_world t4b-clean)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" "a clean home still updates"
+
+  w=$(new_world t4b-untracked)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  printf 'mine\n' > "$w/sm1/skills-lock.json"
+  mkdir -p "$w/sm1/.agents/skills/local/deep" "$w/sm1/other/nested/dir"
+  printf 'mine\n' > "$w/sm1/.agents/skills/local/deep/SKILL.md"
+  printf 'mine\n' > "$w/sm1/other/nested/dir/x"
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" "non-colliding untracked paths do not block the update"
+  assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$(git -C "$w/main" rev-parse origin/main)" \
+    "the home reached the incoming commit"
+  grep -q mine "$w/sm1/skills-lock.json" || fail "untracked file was disturbed"
+  grep -q mine "$w/sm1/.agents/skills/local/deep/SKILL.md" || fail "untracked nested file was disturbed"
+
+  w=$(new_world t4b-file)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" clash.txt
+  printf 'mine\n' > "$w/sm1/clash.txt"
+  before=$(git -C "$w/sm1" rev-parse HEAD)
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: untracked clash.txt collides" \
+    "a colliding untracked file is refused and named"
+  assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$before" "a colliding home was moved"
+  grep -q mine "$w/sm1/clash.txt" || fail "colliding untracked file was discarded"
+
+  w=$(new_world t4b-dir)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/deep/incoming.txt
+  mkdir -p "$w/sm1/new/deep"
+  printf 'mine\n' > "$w/sm1/new/deep/other.txt"
+  before=$(git -C "$w/sm1" rev-parse HEAD)
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: untracked new/ collides" \
+    "an untracked directory holding an incoming path is refused and named"
+  assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$before" "a colliding home was moved"
+
+  w=$(new_world t4b-shadow)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" shadow
+  mkdir -p "$w/sm1/shadow"
+  printf 'mine\n' > "$w/sm1/shadow/x"
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: untracked shadow/ collides" \
+    "an untracked directory shadowing an incoming file is refused"
+
+  w=$(new_world t4b-staged)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  printf 'staged\n' > "$w/sm1/staged.txt"
+  git -C "$w/sm1" add staged.txt
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: dirty working tree" "a staged path still refuses"
+
+  w=$(new_world t4b-mixed)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  printf 'untracked\n' > "$w/sm1/zz-untracked.txt"
+  printf 'edit\n' >> "$w/sm1/AGENTS.md"
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: dirty working tree" \
+    "a tracked edit refuses even alongside tolerated untracked paths"
+  pass "T4b untracked dirt is tolerated unless it collides with the incoming range"
+}
+
 # --- T5: diverged secondmate is skipped, its commit preserved --------------
 test_diverged_secondmate_skipped() {
   local w out before marker second_out
@@ -698,6 +788,7 @@ test_unprovable_runtime_gets_fallback_nudge
 test_dead_secondmate_gets_no_action
 test_legacy_remote_advance_restarts
 test_dirty_secondmate_skipped
+test_untracked_dirt_tolerated_unless_colliding
 test_diverged_secondmate_skipped
 test_squash_merged_divergence_reconciles
 test_already_current_secondmate_still_restarts

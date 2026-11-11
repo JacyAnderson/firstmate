@@ -270,13 +270,34 @@ remote_inherit_failure_reason() { # <output>
   fi
 }
 
+# Print the first thing that makes <dir> unsafe to fast-forward, or nothing.
+# Without <base> any porcelain line counts. With <base>, untracked paths are
+# tolerated (a fast-forward never touches them) unless one collides with a path
+# in HEAD..<base>, which is printed as its "?? <path>" line.
 dirty_status() {
-  local dir=$1 ignore_seed_marker=${2:-no}
-  if [ "$ignore_seed_marker" = yes ]; then
-    git -C "$dir" status --porcelain 2>/dev/null | awk -v marker="?? $SUB_HOME_MARKER" '$0 != marker { print; exit }'
-  else
-    git -C "$dir" status --porcelain 2>/dev/null | head -1
+  local dir=$1 ignore_seed_marker=${2:-no} base=${3:-} code path incoming
+  if [ -z "$base" ]; then
+    if [ "$ignore_seed_marker" = yes ]; then
+      git -C "$dir" status --porcelain 2>/dev/null | awk -v marker="?? $SUB_HOME_MARKER" '$0 != marker { print; exit }'
+    else
+      git -C "$dir" status --porcelain 2>/dev/null | head -1
+    fi
+    return 0
   fi
+  incoming=$(git -C "$dir" diff --name-only -z HEAD "$base" 2>/dev/null | tr '\0' '\n')
+  while IFS= read -r -d '' code; do
+    path=${code:3}
+    if [ "${code:0:2}" != '??' ]; then
+      printf '%s\n' "$code"
+      return 0
+    fi
+    [ "$ignore_seed_marker" = yes ] && [ "$path" = "$SUB_HOME_MARKER" ] && continue
+    if printf '%s\n' "$incoming" | awk -v p="${path%/}" \
+      'index($0, p "/") == 1 || p == $0 || index(p, $0 "/") == 1 { found = 1; exit } END { exit !found }'; then
+      printf '%s\n' "$code"
+      return 0
+    fi
+  done < <(git -C "$dir" status --porcelain -z 2>/dev/null)
 }
 
 secondmate_update_reconcile_marker_path() { # <state> <id>
@@ -406,7 +427,7 @@ ff_target() {
     return 0
   fi
 
-  local default base cur instr local_rev base_rev before after out
+  local default base cur instr local_rev base_rev before after out dirty
   default=$(default_branch "$dir") || {
     echo "$label: skipped: cannot determine default branch"
     return 0
@@ -446,7 +467,11 @@ ff_target() {
     return 0
   fi
 
-  if [ -n "$(dirty_status "$dir" "$ignore_seed_marker")" ]; then
+  dirty=$(dirty_status "$dir" "$ignore_seed_marker" "$base")
+  if [ "${dirty:0:3}" = '?? ' ]; then
+    echo "$label: skipped: untracked ${dirty:3} collides with the incoming update"
+    return 0
+  elif [ -n "$dirty" ]; then
     echo "$label: skipped: dirty working tree"
     return 0
   fi
