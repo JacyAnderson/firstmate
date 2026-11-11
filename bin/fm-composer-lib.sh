@@ -455,7 +455,7 @@ fm_composer_strip_ghost() {
 # Matching a footer to confirm a keystroke landed is a different question from
 # asking what a worker is doing, and the two must not be conflated.
 # Delivery-only rendered busy footers per harness. claude/codex: "esc to
-# interrupt"; opencode: "esc interrupt"; pi: "Working..."; omp: its `⎋ <label>` working row; grok: "Ctrl+c:cancel"; agy: "esc to cancel";
+# interrupt"; opencode: "esc interrupt"; pi: "Working..."; omp: "Working…"; grok: "Ctrl+c:cancel"; agy: "esc to cancel";
 # devin: "esc twice to interrupt" and its "❭ Guide Devin while it works" working composer;
 # cortex: "(esc to interrupt)" on its spinner row and "Type to queue message..." in its working composer;
 # commandcode: "esc to interrupt" beside a bullet-framed elapsed cell.
@@ -508,17 +508,17 @@ FM_DELIVERY_COMMANDCODE_BUSY_REGEX_DEFAULT='esc to interrupt|•[[:space:]]+[0-9
 FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
-# omp (Oh My Pi) renders its TUI busy line as `⎋ Working…` with U+2026
-# HORIZONTAL ELLIPSIS, not Pi's three ASCII dots (verified byte-level on omp
-# 18.1.2, re-verified live on 18.1.11 through the Herdr backend), and from
-# 18.18.8 the model's intent text replaces `Working…` for most of a turn, so
-# the unicode preset's `⎋` (key.esc) glyph that opens the row matches with any
-# label. A key hint such as `⎋: cancel` puts a colon after the glyph and does
-# not match. Only the TUI form is accepted: every supervised omp pane is the
-# TUI, and the three-dot spelling its headless -p mode writes to stderr never
-# reaches a pane. The status row's leading braille spinner plus elapsed cell
-# (`⠧ 11s`) is the second, independent busy signal, so no single vendor string
-# is load-bearing; its idle form is a static identity glyph with no elapsed time.
+# omp (Oh My Pi) renders its TUI busy line as `Working…` with U+2026 HORIZONTAL
+# ELLIPSIS, not Pi's three ASCII dots (verified byte-level on omp 18.1.2,
+# re-verified live on 18.1.11 through the Herdr backend). Only the TUI form is
+# accepted: every supervised omp pane is the TUI, and the three-dot spelling its
+# headless -p mode writes to stderr never reaches a pane. The status row's
+# leading braille spinner plus elapsed cell (`⠧ 11s`) is the second, independent
+# busy signal, so no single vendor string is load-bearing; its idle form is a
+# static identity glyph with no elapsed time.
+# On 18.18.8 the model's intent text replaces `Working…` for most of a turn
+# (`⎋ Draining wakes in full`). That `⎋` row is not matched: a plain capture
+# cannot tell it from quoted output, so the spinner cell carries those turns.
 # The spinner is an alternation of omp 18.1.11's unicode-preset frames (its
 # `status` set ⣾⣽⣻⢿⡿⣟⣯⣷ and `activity` set ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, read from the
 # build that rendered the live `⠧`), declared once for the busy regex and the
@@ -527,7 +527,7 @@ FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
 # ("Invalid collation character"), so `[⠁-⣿]` compiled on macOS and failed
 # every omp busy and furniture read on Linux CI.
 FM_OMP_SPINNER_FRAMES_RE='(⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⣾|⣽|⣻|⢿|⡿|⣟|⣯|⣷)'
-FM_DELIVERY_OMP_BUSY_REGEX_DEFAULT='Working…|^[[:space:]]*⎋[[:space:]]+[^[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]'
+FM_DELIVERY_OMP_BUSY_REGEX_DEFAULT='Working…|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]'
 FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT='Ctrl\+c:cancel'
 # cursor-agent's busy footer. The TOKEN is matched, not the spinner verb: the
 # same version rendered both `Working` and `Running` beside its braille spinner
@@ -677,14 +677,12 @@ FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
 # a wrapped typed row such as `fix · tests` stays composer input; the ascii
 # preset's `pi` is deliberately absent because that preset's `sep.dot` is
 # ` - `, so its status row never carries a middle dot and a `pi ·` alternative
-# could only ever match typed text), when it opens with one of omp's spinner
-# frames then an elapsed cell, or when it carries the context-usage cell after
-# a middle dot. It is consulted only as the boundary BELOW a bare composer,
-# never on the composer row itself.
-# The context cell must open with its `◫` icon, so a wrapped draft such as
-# `coverage · 50%/1M` stays typed input; 18.18.8 draws a 1M-token window as
-# `◫ 53.9%/1M`, hence the M suffix (tests/fixtures/omp-18.18.8).
-FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)|[[:space:]]·[[:space:]]+◫[[:space:]]*[0-9]+(\.[0-9]+)?%/[0-9]+(\.[0-9]+)?[KM]'
+# could only ever match typed text), or when it opens with one of omp's spinner
+# frames then an elapsed cell. It is consulted only as the boundary BELOW a
+# bare composer, never on the composer row itself. A context cell alone
+# (`◫ 53.9%/1M`) proves nothing, because a wrapped draft can carry the same
+# text, so a status row that opens with a focused subagent's id stays input.
+FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)'
 # Pi's footer stats row opens at column 0 with the session cost when every
 # token counter is zero (`$0.000 (sub) 5.4%/272k (auto)` on pi 0.85.1).
 # That leading `$` is a cost cell, not a dead-shell prompt, only when a digit
