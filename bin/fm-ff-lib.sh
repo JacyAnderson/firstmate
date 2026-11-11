@@ -28,8 +28,10 @@
 # (data/, state/, config/, projects/, .no-mistakes/), so it cannot disturb a
 # secondmate's backlog, projects, or in-flight work.
 # The seeded .fm-secondmate-home identity marker is gitignored too; the local
-# sync tolerates only that marker during the one-time upgrade of pre-ignore
+# sync tolerates that marker during the one-time upgrade of pre-ignore
 # linked-worktree homes.
+# Untracked paths in general never block a fast-forward unless one collides with
+# a path the incoming commits add; tracked edits and staged changes always do.
 # A clean secondmate divergence is reconciled only when a three-way tree proof
 # shows that its complete local result is already present in the target, as
 # happens after an upstream squash merge. Every other divergence stays put and
@@ -271,11 +273,13 @@ remote_inherit_failure_reason() { # <output>
 }
 
 # Print the first thing that makes <dir> unsafe to fast-forward, or nothing.
-# Without <base> any porcelain line counts. With <base>, untracked paths are
-# tolerated (a fast-forward never touches them) unless one collides with a path
-# in HEAD..<base>, which is printed as its "?? <path>" line.
+# Without <base> any porcelain line counts. With <base>, only tracked changes and
+# untracked leaf paths that equal, sit under, or contain a path in HEAD..<base>
+# count; the latter print as "?? <shell-quoted path>". Paths stay NUL-delimited
+# and are compared as literal strings, never through awk or status display
+# settings.
 dirty_status() {
-  local dir=$1 ignore_seed_marker=${2:-no} base=${3:-} code path incoming
+  local dir=$1 ignore_seed_marker=${2:-no} base=${3:-} line incoming=() untracked=() path i u
   if [ -z "$base" ]; then
     if [ "$ignore_seed_marker" = yes ]; then
       git -C "$dir" status --porcelain 2>/dev/null | awk -v marker="?? $SUB_HOME_MARKER" '$0 != marker { print; exit }'
@@ -284,20 +288,24 @@ dirty_status() {
     fi
     return 0
   fi
-  incoming=$(git -C "$dir" diff --name-only -z HEAD "$base" 2>/dev/null | tr '\0' '\n')
-  while IFS= read -r -d '' code; do
-    path=${code:3}
-    if [ "${code:0:2}" != '??' ]; then
-      printf '%s\n' "$code"
-      return 0
-    fi
-    [ "$ignore_seed_marker" = yes ] && [ "$path" = "$SUB_HOME_MARKER" ] && continue
-    if printf '%s\n' "$incoming" | awk -v p="${path%/}" \
-      'index($0, p "/") == 1 || p == $0 || index(p, $0 "/") == 1 { found = 1; exit } END { exit !found }'; then
-      printf '%s\n' "$code"
-      return 0
-    fi
-  done < <(git -C "$dir" status --porcelain -z 2>/dev/null)
+  line=$(git -C "$dir" status --porcelain --untracked-files=no 2>/dev/null | head -1)
+  if [ -n "$line" ]; then
+    printf '%s\n' "$line"
+    return 0
+  fi
+  while IFS= read -r -d '' path; do incoming+=("$path"); done \
+    < <(git -C "$dir" diff --name-only -z HEAD "$base" 2>/dev/null)
+  while IFS= read -r -d '' path; do untracked+=("$path"); done \
+    < <(git -C "$dir" ls-files --others --exclude-standard -z 2>/dev/null)
+  for u in ${untracked[@]+"${untracked[@]}"}; do
+    [ "$ignore_seed_marker" = yes ] && [ "$u" = "$SUB_HOME_MARKER" ] && continue
+    for i in ${incoming[@]+"${incoming[@]}"}; do
+      if [[ $u == "$i" || $u == "$i"/* || $i == "$u"/* ]]; then
+        printf '?? %q\n' "$u"
+        return 0
+      fi
+    done
+  done
 }
 
 secondmate_update_reconcile_marker_path() { # <state> <id>
@@ -526,7 +534,11 @@ ff_target() {
   instr=$(changed_instr "$dir" "$base")
   before=$(git -C "$dir" rev-parse --short HEAD)
   if ! out=$(git -C "$dir" merge --ff-only "$base" 2>&1); then
-    echo "$label: skipped: fast-forward failed: $(first_line "$out")"
+    # Git lists the paths it would overwrite on tab-indented lines; keep them so a
+    # collision the preflight cannot see (case-insensitive filesystems) is named.
+    local blocked
+    blocked=$(printf '%s\n' "$out" | sed -n $'s/^\t//p' | paste -sd, -)
+    echo "$label: skipped: fast-forward failed: $(first_line "$out")${blocked:+ ($blocked)}"
     return 0
   fi
   after=$(git -C "$dir" rev-parse --short HEAD)

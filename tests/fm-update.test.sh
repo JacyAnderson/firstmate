@@ -376,9 +376,60 @@ test_untracked_dirt_tolerated_unless_colliding() {
   printf 'mine\n' > "$w/sm1/new/deep/other.txt"
   before=$(git -C "$w/sm1" rev-parse HEAD)
   out=$(run_update "$w")
-  assert_contains "$out" "secondmate sm1: skipped: untracked new/ collides" \
-    "an untracked directory holding an incoming path is refused and named"
+  assert_contains "$out" "secondmate sm1: updated" \
+    "a sibling file in a wholly untracked directory does not block the update"
+  grep -q mine "$w/sm1/new/deep/other.txt" || fail "untracked sibling was disturbed"
+
+  w=$(new_world t4b-dirobstruct)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  mkdir -p "$w/sm1/new"
+  printf 'mine\n' > "$w/sm1/new"/x
+  git -C "$w/sm1" config status.showUntrackedFiles no
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" \
+    "a sibling in an untracked directory updates whatever status.showUntrackedFiles says"
+
+  w=$(new_world t4b-fileoverdir)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  printf 'mine\n' > "$w/sm1/new"
+  before=$(git -C "$w/sm1" rev-parse HEAD)
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: untracked new collides" \
+    "an untracked file where an incoming directory goes is refused and named"
   assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$before" "a colliding home was moved"
+
+  w=$(new_world t4b-numeric)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" 1
+  printf 'mine\n' > "$w/sm1/01"
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" "01 and 1 are distinct paths"
+
+  local n=0
+  for name in $'clash\nname' 'clash\name'; do
+    n=$((n + 1))
+    w=$(new_world "t4b-odd$n")
+    add_sm "$w" sm1
+    bump_origin_adding "$w" "$name"
+    printf 'mine\n' > "$w/sm1/$name"
+    before=$(git -C "$w/sm1" rev-parse HEAD)
+    out=$(run_update "$w")
+    assert_contains "$out" "skipped: untracked $(printf '%q' "$name") collides" \
+      "an unusual colliding name is named byte for byte"
+    assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$before" "a colliding home was moved"
+  done
+
+  w=$(new_world t4b-case)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" Case.txt
+  printf 'mine\n' > "$w/sm1/case.txt"
+  if [ -e "$w/sm1/Case.txt" ]; then
+    out=$(run_update "$w")
+    assert_contains "$out" "fast-forward failed" "a case-only collision is refused"
+    assert_contains "$out" "(case.txt)" "git's offending path is kept in the message"
+  fi
 
   w=$(new_world t4b-shadow)
   add_sm "$w" sm1
@@ -386,7 +437,7 @@ test_untracked_dirt_tolerated_unless_colliding() {
   mkdir -p "$w/sm1/shadow"
   printf 'mine\n' > "$w/sm1/shadow/x"
   out=$(run_update "$w")
-  assert_contains "$out" "secondmate sm1: skipped: untracked shadow/ collides" \
+  assert_contains "$out" "secondmate sm1: skipped: untracked shadow/x collides" \
     "an untracked directory shadowing an incoming file is refused"
 
   w=$(new_world t4b-staged)
