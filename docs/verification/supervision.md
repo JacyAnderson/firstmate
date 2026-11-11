@@ -74,7 +74,8 @@ Over 318 samples the idle composer read `empty`, a typed draft read `pending` id
 ```
 
 While busy the status row opened with the braille spinner and elapsed cell (`⠼ 1h`), and the working row above the composer showed `⎋ Working…` in only 5 of 311 busy samples; the rest carried the model's intent text, such as `⎋ Draining wakes in full`.
-The rendered busy regex therefore matches the `⎋` working row with any label, and the status row recognizes a context cell with an `M` window as well as `K`.
+The rendered busy regex therefore matches the `⎋` working row with any label, and the status row recognizes a `◫` context cell with an `M` window as well as `K`.
+These screens are all under the captain's `unicode` symbol preset, and no dialog or selector opened during the window, so omp's dialog hint rows are not captured.
 Only the `borderless` composer shape is verified: workers get it from `.omp/fm-worker-overlay.yml`, while a primary takes the captain's own `composer.shape`.
 `tests/fixtures/omp-18.18.8/` holds the captured idle, busy, and typed screens with the transcript trimmed, and `tests/fm-composer-lib.test.sh` pins their verdicts and each busy signal alone.
 
