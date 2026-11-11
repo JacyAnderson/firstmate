@@ -1,6 +1,7 @@
 # omp (Oh My Pi)
 
 Verified for crew, scout, secondmate, and primary work on Herdr on 2026-09-05 with omp 18.1.11, building on the 2026-09-02 adapter investigation against 18.1.2.
+The composer and rendered busy reads were re-verified on a live omp 18.18.8 primary on 2026-11-11.
 omp is a Pi fork, so `references/harness/pi.md` is the nearest relative; every difference from Pi is stated here.
 Cross-harness provider and credential identity is owned by `references/common/model-and-effort.md`.
 
@@ -18,7 +19,7 @@ Cross-harness provider and credential identity is owned by `references/common/mo
 | Effort flag | `--thinking <off\|minimal\|low\|medium\|high\|xhigh\|max\|auto>`, a superset of the shared vocabulary, so every level including `max` maps straight across. |
 | Model discovery | `omp models [--json]` lists built-in and auto-discovered providers only; extension-registered providers such as `claude-bridge` never appear, so those models pass through the spawn unvalidated with a stderr notice. `omp usage` shows provider windows; `quota-axi` covers the `claude` provider when the bridge is in use. |
 | Marker | None of omp's own (verified: `PI_CODING_AGENT` absent from the binary, no `PI_CODING_AGENT_DIR` or `OMP_PROFILE` in the default profile). `FM_OMP_HARNESS=omp` is Firstmate's launch marker; ancestry matches the exact process name `omp`. |
-| Composer | Pinned to `composer.shape: borderless` by the overlay, a bare `❯` (U+276F) row the shared classifier already reads; busy text is `Working…` (U+2026), the only spelling the omp busy regex accepts (the three-dot form its headless `-p` mode writes never reaches a supervised pane), with the status row's braille spinner plus elapsed cell as the second signal. |
+| Composer | Pinned to `composer.shape: borderless` by the overlay, a bare `❯` (U+276F) row the shared classifier already reads; a primary takes the captain's own `composer.shape`, and only `borderless` is verified. While a turn runs, a `⎋` working row sits above the composer, labelled `Working…` (U+2026) or, on 18.18.8, the model's intent text for most of the turn; the omp busy regex matches that row with any label (never the three-dot form headless `-p` writes), with the status row's braille spinner plus elapsed cell as the second signal. |
 | Autonomy | `--auto-approve` owns approval (omp forces `tools.approvalMode: yolo` for the session under it); the overlay pins `plan.defaultOnStartup: false`, `prewalk.enabled: false`, `retry.usageReservePolicy: auto`. |
 | Trust | No project-trust gate at all; a fresh profile shows a provider-login wizard instead, suppressed by `OMP_SKIP_SETUP=1`. |
 | Resume | `-c/--continue` and `-r/--resume` exist but carry no verified pane-resume contract; use deterministic relaunch. |

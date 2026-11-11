@@ -669,6 +669,65 @@ test_matrix_omp_status_row_bounds_bare_composer() {
   pass "matrix: omp's status row bounds the bare composer's wrap region"
 }
 
+test_matrix_omp_18_18_live_fixtures() {
+  # Live omp 18.18.8 primary screens from Herdr's styled viewport capture,
+  # with the transcript trimmed and the queued item's text replaced. The model's
+  # intent text replaces the `Working…` label, and a 1M-token window renders
+  # its context cell as `/1M`.
+  local dir=$ROOT/tests/fixtures/omp-18.18.8 idle drafted busy working typed screen
+  idle=$(<"$dir/omp-18.18.8-idle.ansi")
+  drafted=$(<"$dir/omp-18.18.8-typed-idle.ansi")
+  busy=$(<"$dir/omp-18.18.8-busy.ansi")
+  working=$(<"$dir/omp-18.18.8-busy-working.ansi")
+  typed=$(<"$dir/omp-18.18.8-typed-busy.ansi")
+  assert_screen "idle omp 18.18.8" empty "$CAPS_STYLED" "$idle"
+  assert_screen "idle omp 18.18.8 on a plain capture" empty "$CAPS_PLAIN" "$idle"
+  assert_screen "typed omp 18.18.8 text on an idle pane is pending" pending "$CAPS_STYLED" "$drafted"
+  assert_screen "busy omp 18.18.8 with an intent label keeps an empty composer" empty "$CAPS_STYLED" "$busy"
+  assert_screen "busy omp 18.18.8 with the Working… label keeps an empty composer" empty "$CAPS_STYLED" "$working"
+  assert_screen "typed omp 18.18.8 text under a queued message is pending" pending "$CAPS_STYLED" "$typed"
+  assert_screen "typed omp 18.18.8 text on a plain capture stays unproven" unknown "$CAPS_PLAIN" "$typed"
+  # The status row stays furniture when it loses its identity cell (a focused
+  # subagent replaces it with that agent's id), carried by the 1M context
+  # cell alone. Assert the divergence first so the case cannot go vacuous.
+  screen=${idle/π/explore-1}
+  [ "$screen" != "$idle" ] || fail "fixture lost its omp identity cell"
+  _fm_composer_row_is_omp_status ' explore-1 · ◑ Opus 5.5 (US) · ⑂ main' \
+    && fail "an omp status row with neither identity, spinner nor context cell must not be furniture"
+  assert_screen "an omp 18.18.8 status row bounded by its 1M context cell alone" empty "$CAPS_STYLED" "$screen"
+  # Anything that is not a recognized composer stays unknown: the same screen
+  # with its `❯` row gone has no composer to prove.
+  screen=$(printf '%s\n' "$idle" | grep -v '^❯')
+  [ "$screen" != "$idle" ] || fail "fixture lost its composer row"
+  assert_screen "an omp 18.18.8 status row with no composer above it" unknown "$CAPS_STYLED" "$screen"
+  # Rendered busy: each busy screen must read busy on either signal alone, the
+  # `⎋ <label>` working row or the status row's spinner plus elapsed cell, and
+  # the idle screen on neither.
+  local name plain
+  for name in busy working typed; do
+    plain=$(printf '%s\n' "${!name}" | fm_composer_strip_ansi)
+    printf '%s' "$plain" | fm_busy_lines_match omp \
+      || fail "omp 18.18.8 $name screen must read busy"
+    screen=$(printf '%s\n' "$plain" | grep -v '^ ⠋\|^ ⠙\|^ ⠹\|^ ⠸\|^ ⠼\|^ ⠴\|^ ⠦\|^ ⠧\|^ ⠇\|^ ⠏')
+    [ "$screen" != "$plain" ] || fail "omp 18.18.8 $name fixture lost its spinner status row"
+    printf '%s' "$screen" | fm_busy_lines_match omp \
+      || fail "omp 18.18.8 $name screen must read busy from its working row alone"
+    LC_ALL=C fm_busy_lines_match omp <<<"$screen" \
+      || fail "omp 18.18.8 $name working row must read busy under LC_ALL=C"
+    screen=$(printf '%s\n' "$plain" | grep -v '⎋')
+    [ "$screen" != "$plain" ] || fail "omp 18.18.8 $name fixture lost its working row"
+    printf '%s' "$screen" | fm_busy_lines_match omp \
+      || fail "omp 18.18.8 $name screen must read busy from its status row alone"
+  done
+  for name in idle drafted; do
+    printf '%s\n' "${!name}" | fm_composer_strip_ansi | fm_busy_lines_match omp \
+      && fail "idle omp 18.18.8 $name screen must not read busy"
+  done
+  printf '  ⎋: cancel  ⏎: save\n' | fm_busy_lines_match omp \
+    && fail "an omp key hint row must not read busy"
+  pass "matrix: omp 18.18.8 live screens read empty, pending, busy, and unknown"
+}
+
 # codex_cell <grey> <glyph>: one codex 0.154 starfield cell exactly as the
 # harness draws it - a truecolor grey foreground, the composer's grey
 # background, the braille glyph, then a reset.
@@ -1696,6 +1755,7 @@ test_matrix_cursor_reverse_video_placeholder_remnant
 test_matrix_cursor_fully_dim_placeholder
 test_matrix_herdr_halfblock_rule_bounds_bare_wrap
 test_matrix_omp_status_row_bounds_bare_composer
+test_matrix_omp_18_18_live_fixtures
 test_matrix_codex_idle_starfield_furniture
 test_matrix_pi_separated_needs_identity
 test_matrix_pi_dollar_status_footer_is_empty
