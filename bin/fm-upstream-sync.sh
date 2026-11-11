@@ -118,8 +118,12 @@ hotspot_note() {
     bin/fm-pr-check.sh|bin/fm-pr-poll.sh|bin/fm-teardown.sh|tests/fm-pr-check-security.test.sh)
       notes="$notes; pr-comments review-comment wakes (GitHub and GitLab only)" ;;
     bin/fm-test-run.sh) notes="$notes; test family lists: keep both sides' entries" ;;
-    bin/fm-watch.sh) notes="$notes; surface_nonterminal_stale guards the paused recheck age against an empty stat_mtime" ;;
+    bin/fm-watch.sh) notes="$notes; surface_nonterminal_stale guards the paused recheck age against an empty stat_mtime, and paused_recheck_silent refuses silence while a blocking dialog shows" ;;
     tests/fm-herdr-lab.test.sh) notes="$notes; HOME is a real short temp directory, not /home/test" ;;
+    bin/fm-afk-start.sh|bin/fm-afk-launch.sh|tests/fm-afk-launch.test.sh)
+      notes="$notes; fresh away entry also clears, and launch backs up, the watcher's .stale-v3.* hand-off markers" ;;
+    tests/fm-watch-triage.test.sh) notes="$notes; keep the fork's test_afk_fresh_entry_rehands_an_unchanged_idle_pane" ;;
+    tests/fm-watch-triage-pause.test.sh) notes="$notes; keep the fork's test_silent_recheck_flag_on_wakes_for_a_blocking_dialog" ;;
     tests/fm-bearings-snapshot.test.sh) notes="$notes; keep the fork's bare-branch PR test in the fm_test_run list" ;;
     docs/configuration.md) notes="$notes; FM_SPAWN_WORKTREE_TIMEOUT and review-comment wording in the environment list" ;;
     .github/workflows/no-mistakes-required.yml) notes="$notes; fork owner exemption" ;;
