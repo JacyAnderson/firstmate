@@ -670,16 +670,21 @@ test_matrix_omp_status_row_bounds_bare_composer() {
 }
 
 test_matrix_omp_18_18_live_fixtures() {
-  # Live omp 18.18.8 primary screens from Herdr's styled viewport capture,
-  # with the transcript trimmed and the queued item's text replaced. The model's
-  # intent text replaces the `Working…` label, and a 1M-token window renders
-  # its context cell as `/1M`.
-  local dir=$ROOT/tests/fixtures/omp-18.18.8 idle drafted busy working typed screen
+  # Live omp 18.18.8 screens: the idle, typed, busy, and slash-popup ones from
+  # a primary through Herdr's styled viewport (transcript trimmed, session text
+  # replaced), the dialogs and the fresh-session hint from a throwaway omp under
+  # .omp/fm-worker-overlay.yml in a private tmux server.
+  local dir=$ROOT/tests/fixtures/omp-18.18.8 name screen plain caps want
+  local idle drafted busy working typed popup settings picker hint
   idle=$(<"$dir/omp-18.18.8-idle.ansi")
   drafted=$(<"$dir/omp-18.18.8-typed-idle.ansi")
   busy=$(<"$dir/omp-18.18.8-busy.ansi")
   working=$(<"$dir/omp-18.18.8-busy-working.ansi")
   typed=$(<"$dir/omp-18.18.8-typed-busy.ansi")
+  popup=$(<"$dir/omp-18.18.8-slash-popup.ansi")
+  settings=$(<"$dir/omp-18.18.8-settings-dialog.ansi")
+  picker=$(<"$dir/omp-18.18.8-model-picker.ansi")
+  hint=$(<"$dir/omp-18.18.8-fresh-hint.ansi")
   assert_screen "idle omp 18.18.8" empty "$CAPS_STYLED" "$idle"
   assert_screen "idle omp 18.18.8 on a plain capture" empty "$CAPS_PLAIN" "$idle"
   assert_screen "typed omp 18.18.8 text on an idle pane is pending" pending "$CAPS_STYLED" "$drafted"
@@ -687,49 +692,56 @@ test_matrix_omp_18_18_live_fixtures() {
   assert_screen "busy omp 18.18.8 with the Working… label keeps an empty composer" empty "$CAPS_STYLED" "$working"
   assert_screen "typed omp 18.18.8 text under a queued message is pending" pending "$CAPS_STYLED" "$typed"
   assert_screen "typed omp 18.18.8 text on a plain capture stays unproven" unknown "$CAPS_PLAIN" "$typed"
-  # The status row stays furniture when it loses its identity cell (a focused
-  # subagent replaces it with that agent's id), carried by the 1M context
-  # cell alone. Assert the divergence first so the case cannot go vacuous.
-  screen=${idle/π/explore-1}
-  [ "$screen" != "$idle" ] || fail "fixture lost its omp identity cell"
-  _fm_composer_row_is_omp_status ' explore-1 · ◑ Opus 5.5 (US) · ⑂ main' \
-    && fail "an omp status row with neither identity, spinner nor context cell must not be furniture"
-  assert_screen "an omp 18.18.8 status row bounded by its 1M context cell alone" empty "$CAPS_STYLED" "$screen"
-  # A wrapped draft with a middle dot and a usage-shaped token is still typed
-  # input: only a cell opening with the `◫` icon counts as context.
-  screen=$'transcript line\n\n❯ please record the\ndraft · coverage 50%/1M tokens\n π · ◑ Opus 5.5 (US) · ◫ 53.9%/1M'
-  assert_screen "a wrapped draft shaped like a context cell stays pending" pending "$CAPS_STYLED" "$screen"
-  assert_screen "a wrapped draft shaped like a context cell stays pending under the cursor" pending "$CAPS_TMUX" "$screen" 3
-  # Anything that is not a recognized composer stays unknown: the same screen
-  # with its `❯` row gone has no composer to prove.
-  screen=$(printf '%s\n' "$idle" | grep -v '^❯')
-  [ "$screen" != "$idle" ] || fail "fixture lost its composer row"
-  assert_screen "an omp 18.18.8 status row with no composer above it" unknown "$CAPS_STYLED" "$screen"
-  # Rendered busy: each busy screen must read busy on either signal alone, the
-  # `⎋ <label>` working row or the status row's spinner plus elapsed cell, and
-  # the idle screen on neither.
-  local name plain
+  assert_screen "an omp 18.18.8 slash popup over a typed command is pending" pending "$CAPS_STYLED" "$popup"
+  for screen in "$settings" "$picker"; do
+    assert_screen "an omp 18.18.8 dialog" unknown "$CAPS_STYLED" "$screen"
+    assert_screen "an omp 18.18.8 dialog on a plain capture" unknown "$CAPS_PLAIN" "$screen"
+  done
+  # The fresh-session `⇧⇥ to change thinking effort` hint shares the composer
+  # row, and its key cell survives ghost stripping, so it is not proven empty.
+  assert_screen "an omp 18.18.8 fresh-session hint is not proven empty" pending "$CAPS_STYLED" "$hint"
+  assert_screen "an omp 18.18.8 fresh-session hint on a plain capture" unknown "$CAPS_PLAIN" "$hint"
+  # A continuation row carrying only a context-shaped cell is typed input, for
+  # omp and every other harness, whether or not the glyph row has text.
+  for screen in \
+    $'transcript line\n\n❯\nreport · ◫ 50%/1M\n π · ◑ Opus 5.5 · ◫ 53.9%/1M' \
+    $'transcript line\n\n❯\nreport · ◫ 50%/272K\n π · ◑ Opus 5.5 · ◫ 53.9%/1M' \
+    $'transcript line\n\n❯\nreport · 50%/272K\n π · ◑ Opus 5.5 · ◫ 53.9%/1M' \
+    $'transcript line\n\n❯\n explore-1 · qwen3:8b · detached ?1 · 36.7%/41K'; do
+    for caps in "$CAPS_STYLED" "$CAPS_PLAIN"; do
+      want=pending
+      [ "$caps" = "$CAPS_STYLED" ] || want=unknown
+      assert_screen "a context-shaped continuation row stays input" "$want" "$caps" "$screen"
+      FM_COMPOSER_HARNESS=claude assert_screen "a context-shaped continuation row stays input for claude" "$want" "$caps" "$screen"
+    done
+  done
+  screen=$'transcript line\n\n❯ please explain\nreport · ◫ 50%/272K\n π · ◑ Opus 5.5 · ◫ 53.9%/1M'
+  plain=$(fm_composer_extract_selected_content "$CAPS_STYLED" "$screen")
+  [ "$plain" = 'please explain report · ◫ 50%/272K' ] \
+    || fail "extraction must keep a context-shaped continuation row, got '$plain'"
+  # Rendered busy: every busy screen carries the status row's spinner plus
+  # elapsed cell; the idle screens, the dialogs, and Escape rows quoted above an
+  # idle composer read idle.
   for name in busy working typed; do
-    plain=$(printf '%s\n' "${!name}" | fm_composer_strip_ansi)
-    printf '%s' "$plain" | fm_busy_lines_match omp \
+    printf '%s\n' "${!name}" | fm_composer_strip_ansi | fm_busy_lines_match omp \
       || fail "omp 18.18.8 $name screen must read busy"
-    screen=$(printf '%s\n' "$plain" | grep -v '^ ⠋\|^ ⠙\|^ ⠹\|^ ⠸\|^ ⠼\|^ ⠴\|^ ⠦\|^ ⠧\|^ ⠇\|^ ⠏')
-    [ "$screen" != "$plain" ] || fail "omp 18.18.8 $name fixture lost its spinner status row"
-    printf '%s' "$screen" | fm_busy_lines_match omp \
-      || fail "omp 18.18.8 $name screen must read busy from its working row alone"
-    LC_ALL=C fm_busy_lines_match omp <<<"$screen" \
-      || fail "omp 18.18.8 $name working row must read busy under LC_ALL=C"
-    screen=$(printf '%s\n' "$plain" | grep -v '⎋')
-    [ "$screen" != "$plain" ] || fail "omp 18.18.8 $name fixture lost its working row"
+    screen=$(printf '%s\n' "${!name}" | fm_composer_strip_ansi | grep -v '⎋')
     printf '%s' "$screen" | fm_busy_lines_match omp \
       || fail "omp 18.18.8 $name screen must read busy from its status row alone"
   done
-  for name in idle drafted; do
+  for name in idle drafted popup settings picker hint; do
     printf '%s\n' "${!name}" | fm_composer_strip_ansi | fm_busy_lines_match omp \
-      && fail "idle omp 18.18.8 $name screen must not read busy"
+      && fail "omp 18.18.8 $name screen must not read busy"
   done
-  printf '  ⎋: cancel  ⏎: save\n' | fm_busy_lines_match omp \
-    && fail "an omp key hint row must not read busy"
+  for screen in \
+    $'Here are the keys:\n ⎋ cancel\n\n❯\n π · ◑ Opus 5.5 · ◫ 53.9%/1M' \
+    $'  ⎋ explanatory transcript text\n\n❯\n π · ◑ Opus 5.5 · ◫ 53.9%/1M' \
+    $' ⎋ : cancel  ⏎: save\n\n❯\n π · ◑ Opus 5.5 · ◫ 53.9%/1M'; do
+    fm_busy_lines_match omp <<<"$screen" \
+      && fail "a quoted Escape row above an idle omp composer must not read busy"
+    LC_ALL=C fm_busy_lines_match omp <<<"$screen" \
+      && fail "a quoted Escape row above an idle omp composer must not read busy under LC_ALL=C"
+  done
   pass "matrix: omp 18.18.8 live screens read empty, pending, busy, and unknown"
 }
 
