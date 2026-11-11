@@ -118,6 +118,8 @@ hotspot_note() {
     bin/fm-pr-check.sh|bin/fm-pr-poll.sh|bin/fm-teardown.sh|tests/fm-pr-check-security.test.sh)
       notes="$notes; pr-comments review-comment wakes (GitHub and GitLab only)" ;;
     bin/fm-test-run.sh) notes="$notes; test family lists: keep both sides' entries" ;;
+    bin/fm-watch.sh) notes="$notes; surface_nonterminal_stale guards the paused recheck age against an empty stat_mtime" ;;
+    tests/fm-herdr-lab.test.sh) notes="$notes; HOME is a real short temp directory, not /home/test" ;;
     tests/fm-bearings-snapshot.test.sh) notes="$notes; keep the fork's bare-branch PR test in the fm_test_run list" ;;
     docs/configuration.md) notes="$notes; FM_SPAWN_WORKTREE_TIMEOUT and review-comment wording in the environment list" ;;
     .github/workflows/no-mistakes-required.yml) notes="$notes; fork owner exemption" ;;
