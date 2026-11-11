@@ -66,18 +66,25 @@ bash -c '. bin/fm-composer-lib.sh; . bin/backends/herdr.sh
   fm_backend_herdr_composer_state <session>:<pane>'
 ```
 
-Over 318 samples the idle composer read `empty`, a typed draft read `pending` idle or busy, and every other busy screen kept an empty composer, with the status row bounding the bare `❯` row:
+Over 483 samples the idle composer read `empty`, a typed draft read `pending` idle or busy, and every other busy screen kept an empty composer, with the status row bounding the bare `❯` row:
 
 ```text
 ❯
  π · ◑ Opus 5.5 (US) 👁 · 📁 ~/dev/firstmate · ⑂ main ?4 · ◫ 53.9%/1M ⟲ · $36.47 + 👁 4.64   Orchestration health …
 ```
 
-While busy the status row opened with the braille spinner and elapsed cell (`⠼ 1h`), and the working row above the composer showed `⎋ Working…` in only 5 of 311 busy samples; the rest carried the model's intent text, such as `⎋ Draining wakes in full`.
-The rendered busy regex therefore matches the `⎋` working row with any label, and the status row recognizes a `◫` context cell with an `M` window as well as `K`.
-These screens are all under the captain's `unicode` symbol preset, and no dialog or selector opened during the window, so omp's dialog hint rows are not captured.
+Every one of the 460 busy samples opened its status row with the braille spinner and elapsed cell (`⠼ 1h`), which keeps rendered busy readable.
+The working row above the composer showed `⎋ Working…` in only 16 of them; the rest carried the model's intent text, such as `⎋ Draining wakes in full`.
+That `⎋` row is not a busy signal, because a plain capture cannot tell it from the same text quoted in the transcript.
+A row that only carries a context cell such as `◫ 53.9%/1M` does not bound the composer either, because a wrapped draft can carry the same text.
+One sample showed the slash-command popup over a typed `/c`, which read `pending`, and one sample caught the screen mid-submit with no composer drawn, which read `unknown`.
+
+A throwaway omp 18.18.8 under `.omp/fm-worker-overlay.yml`, in a private tmux server with its own `PI_CODING_AGENT_DIR` and no model, supplied the dialog screens.
+The settings dialog and the model picker both read `unknown` on styled and plain captures and were not busy.
+Its fresh-session composer row carries the hint `⇧⇥ to change thinking effort` until a conversation starts; the key cell survives ghost stripping, so that idle row reads `pending` rather than a proven `empty`.
+All screens are under the `unicode` symbol preset.
 Only the `borderless` composer shape is verified: workers get it from `.omp/fm-worker-overlay.yml`, while a primary takes the captain's own `composer.shape`.
-`tests/fixtures/omp-18.18.8/` holds the captured idle, busy, and typed screens with the transcript trimmed, and `tests/fm-composer-lib.test.sh` pins their verdicts and each busy signal alone.
+`tests/fixtures/omp-18.18.8/` holds these screens with session text replaced, and `tests/fm-composer-lib.test.sh` pins their verdicts.
 
 ### Run-tier source vocabulary and context-reset injection
 
