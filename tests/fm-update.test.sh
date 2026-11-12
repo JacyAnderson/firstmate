@@ -428,7 +428,16 @@ test_untracked_dirt_tolerated_unless_colliding() {
   if [ -e "$w/sm1/Case.txt" ]; then
     out=$(run_update "$w")
     assert_contains "$out" "fast-forward failed" "a case-only collision is refused"
-    assert_contains "$out" "(Case.txt)" "git's offending path is kept in the message"
+    assert_contains "$out" "Case.txt" "git's offending path is kept in the message"
+  fi
+
+  w=$(new_world t4b-casenl)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" $'Clash\nname'
+  printf 'mine\n' > "$w/sm1/"$'clash\nname'
+  if [ -e "$w/sm1/"$'Clash\nname' ]; then
+    out=$(run_update "$w")
+    assert_contains "$out" "Clash name" "a case-only collision on a newline name is named in full"
   fi
 
   w=$(new_world t4b-shadow)
@@ -457,6 +466,36 @@ test_untracked_dirt_tolerated_unless_colliding() {
   assert_contains "$out" "secondmate sm1: skipped: dirty working tree" \
     "a tracked edit refuses even alongside tolerated untracked paths"
   pass "T4b untracked dirt is tolerated unless it collides with the incoming range"
+}
+
+# A redundant divergence whose reconciliation hits a case-only untracked
+# collision keeps git's diagnostic, so the path is named.
+test_redundant_divergence_collision_named() {
+  local w out branch_base local_tip
+  w=$(new_world t5c)
+  add_sm "$w" sm1
+  branch_base=$(git -C "$w/sm1" rev-parse HEAD)
+  printf 'v2\n' > "$w/sm1/AGENTS.md"
+  git -C "$w/sm1" add AGENTS.md
+  git -C "$w/sm1" commit -qm local-instructions
+  local_tip=$(git -C "$w/sm1" rev-parse HEAD)
+  bump_origin "$w" readme
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: diverged from origin/main" \
+    "unique local work was not initially protected"
+
+  git -C "$w/sm1" diff "$branch_base" "$local_tip" | git -C "$w/seed" apply
+  printf 'incoming\n' > "$w/seed/Clash.txt"
+  git -C "$w/seed" add -A
+  git -C "$w/seed" commit -qm squash-local-contribution
+  git -C "$w/seed" push -q origin main
+  printf 'mine\n' > "$w/sm1/clash.txt"
+  if [ -e "$w/sm1/Clash.txt" ]; then
+    out=$(run_update "$w")
+    assert_contains "$out" "could not be reconciled with reset --keep" "the collision refuses reconciliation"
+    assert_contains "$out" "Clash.txt" "reset --keep's offending path is kept in the message"
+  fi
+  pass "T5c a redundant-divergence collision is refused with the path named"
 }
 
 # --- T5: diverged secondmate is skipped, its commit preserved --------------
@@ -842,6 +881,7 @@ test_dirty_secondmate_skipped
 test_untracked_dirt_tolerated_unless_colliding
 test_diverged_secondmate_skipped
 test_squash_merged_divergence_reconciles
+test_redundant_divergence_collision_named
 test_already_current_secondmate_still_restarts
 test_already_current_unprovable_mate_is_nudged
 test_registry_backstop_dedup_and_self_exclusion

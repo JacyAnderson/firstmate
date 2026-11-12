@@ -48,6 +48,11 @@ SUB_HOME_MARKER="${SUB_HOME_MARKER:-.fm-secondmate-home}"
 
 # --- helpers ---------------------------------------------------------------
 
+# Git's whole diagnostic on one line, so a path containing a newline survives.
+flat_diag() {
+  printf '%s' "$1" | tr '\n\t' '  ' | sed 's/  */ /g'
+}
+
 first_line() {
   printf '%s\n' "$1" | sed -n '1s/[[:space:]]\{1,\}/ /g;1p'
 }
@@ -502,7 +507,7 @@ ff_target() {
       && divergence_is_redundant "$dir" "$local_rev" "$base_rev"; then
       instr=$(changed_instr "$dir" "$base")
       before=$(git -C "$dir" rev-parse --short HEAD)
-      if git -C "$dir" reset --keep "$base" >/dev/null 2>&1; then
+      if out=$(git -C "$dir" reset --keep "$base" 2>&1); then
         after=$(git -C "$dir" rev-parse --short HEAD)
         FF_STATUS="updated"
         FF_INSTR="$instr"
@@ -514,7 +519,7 @@ ff_target() {
         fi
         return 0
       fi
-      echo "$label: skipped: redundant divergence could not be reconciled with reset --keep"
+      echo "$label: skipped: redundant divergence could not be reconciled with reset --keep: $(flat_diag "$out")"
       return 0
     fi
     if [ -n "$secondmate_id" ] && [ -n "$reconciliation_state" ]; then
@@ -533,11 +538,9 @@ ff_target() {
   instr=$(changed_instr "$dir" "$base")
   before=$(git -C "$dir" rev-parse --short HEAD)
   if ! out=$(git -C "$dir" merge --ff-only "$base" 2>&1); then
-    # Git lists the paths it would overwrite on tab-indented lines; keep them so a
-    # collision the preflight cannot see (case-insensitive filesystems) is named.
-    local blocked
-    blocked=$(printf '%s\n' "$out" | sed -n $'s/^\t//p' | paste -sd, -)
-    echo "$label: skipped: fast-forward failed: $(first_line "$out")${blocked:+ ($blocked)}"
+    # The full diagnostic names a collision the preflight cannot see, such as a
+    # case-only one on a case-insensitive filesystem.
+    echo "$label: skipped: fast-forward failed: $(flat_diag "$out")"
     return 0
   fi
   after=$(git -C "$dir" rev-parse --short HEAD)
