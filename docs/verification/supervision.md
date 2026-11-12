@@ -55,6 +55,36 @@ Both tracked `.omp/extensions/*.ts` files loaded by auto-discovery alone (no `-e
 omp's `session_start` payload carries no reason field, so the adapter derives the source: the first start of the process is `startup` (or `resume` from a `--continue`/`--resume` launch line) and a later in-process start is `clear`; `tests/fm-omp-harness.test.sh` pins that mapping over a fake omp API.
 A file named both by `-e` and by auto-discovery loads twice (two factory calls, doubled `session_stop` continuations), which is why a secondmate launch never names its auto-discovered primary extensions with `-e` and the per-task busy extension lives in `state/`.
 
+### omp (Oh My Pi) composer and busy reads, 2026-11-11
+
+The away and quiet daemon's composer and rendered busy reads for an omp primary were re-verified on 2026-11-11 with omp 18.18.8 and Herdr 0.9.5 on macOS arm64, by reading the live primary pane only, never typing into it.
+Each sample took the styled viewport and the shared verdict the daemon uses:
+
+```sh
+bash -c '. bin/fm-composer-lib.sh; . bin/backends/herdr.sh
+  fm_backend_herdr_visible_capture_ansi <session>:<pane>
+  fm_backend_herdr_composer_state <session>:<pane>'
+```
+
+Over 483 samples the idle composer read `empty`, a typed draft read `pending` idle or busy, and every other busy screen kept an empty composer, with the status row bounding the bare `❯` row:
+
+```text
+❯
+ π · ◑ Opus 5.5 (US) 👁 · 📁 ~/dev/firstmate · ⑂ main ?4 · ◫ 53.9%/1M ⟲ · $36.47 + 👁 4.64   Orchestration health …
+```
+
+Every one of the 460 busy samples opened its status row with the braille spinner and elapsed cell (`⠼ 1h`), which keeps rendered busy readable.
+The working row above the composer showed `⎋ Working…` in only 16 of them; the rest carried the model's intent text, such as `⎋ Draining wakes in full`.
+The omp busy regex does not match that `⎋` row, so the spinner cell carries those turns as their only rendered busy signal.
+One sample showed the slash-command popup over a typed `/c`, which read `pending`, and one sample caught the screen mid-submit with no composer drawn, which read `unknown`.
+
+A throwaway omp 18.18.8 under `.omp/fm-worker-overlay.yml`, in a private tmux server with its own `PI_CODING_AGENT_DIR` and no model, supplied the dialog screens.
+The settings dialog and the model picker both read `unknown` on styled and plain captures and were not busy.
+Its fresh-session composer row carries the hint `⇧⇥ to change thinking effort` until a conversation starts; the key cell survives ghost stripping, so that idle row reads `pending` rather than a proven `empty`.
+All screens are under the `unicode` symbol preset.
+Only the `borderless` composer shape is verified: workers get it from `.omp/fm-worker-overlay.yml`, while a primary takes the captain's own `composer.shape`.
+`tests/fixtures/omp-18.18.8/` holds these screens with session text replaced, and `tests/fm-composer-lib.test.sh` pins their verdicts.
+
 ### Run-tier source vocabulary and context-reset injection
 
 The run tier depends on three facts only the vendor can supply: the session-open source it reports, whether hook stdout reaches model context on a context-RESET open rather than only a cold one, and whether a worker the hook detaches survives the hook returning.

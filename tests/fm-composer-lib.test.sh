@@ -669,6 +669,57 @@ test_matrix_omp_status_row_bounds_bare_composer() {
   pass "matrix: omp's status row bounds the bare composer's wrap region"
 }
 
+test_matrix_omp_18_18_live_fixtures() {
+  # Live omp 18.18.8 screens: idle, typed, busy, and the slash popup from a
+  # primary through Herdr's styled viewport (transcript trimmed, session text
+  # replaced); the dialogs and the fresh-session hint from a throwaway omp under
+  # .omp/fm-worker-overlay.yml in a private tmux server.
+  local dir=$ROOT/tests/fixtures/omp-18.18.8 name screen
+  local idle drafted busy working typed popup settings picker hint
+  idle=$(<"$dir/omp-18.18.8-idle.ansi")
+  drafted=$(<"$dir/omp-18.18.8-typed-idle.ansi")
+  busy=$(<"$dir/omp-18.18.8-busy.ansi")
+  working=$(<"$dir/omp-18.18.8-busy-working.ansi")
+  typed=$(<"$dir/omp-18.18.8-typed-busy.ansi")
+  popup=$(<"$dir/omp-18.18.8-slash-popup.ansi")
+  settings=$(<"$dir/omp-18.18.8-settings-dialog.ansi")
+  picker=$(<"$dir/omp-18.18.8-model-picker.ansi")
+  hint=$(<"$dir/omp-18.18.8-fresh-hint.ansi")
+  assert_screen "idle omp 18.18.8" empty "$CAPS_STYLED" "$idle"
+  assert_screen "idle omp 18.18.8 on a plain capture" empty "$CAPS_PLAIN" "$idle"
+  assert_screen "busy omp 18.18.8 with an intent label keeps an empty composer" empty "$CAPS_STYLED" "$busy"
+  assert_screen "busy omp 18.18.8 with an intent label on a plain capture" empty "$CAPS_PLAIN" "$busy"
+  assert_screen "busy omp 18.18.8 with the Working… label keeps an empty composer" empty "$CAPS_STYLED" "$working"
+  assert_screen "busy omp 18.18.8 with the Working… label on a plain capture" empty "$CAPS_PLAIN" "$working"
+  for screen in "$drafted" "$typed" "$popup"; do
+    assert_screen "typed omp 18.18.8 text is pending" pending "$CAPS_STYLED" "$screen"
+    assert_screen "typed omp 18.18.8 text on a plain capture stays unproven" unknown "$CAPS_PLAIN" "$screen"
+  done
+  for screen in "$settings" "$picker"; do
+    assert_screen "an omp 18.18.8 dialog" unknown "$CAPS_STYLED" "$screen"
+    assert_screen "an omp 18.18.8 dialog on a plain capture" unknown "$CAPS_PLAIN" "$screen"
+  done
+  # The fresh-session `⇧⇥ to change thinking effort` hint shares the composer
+  # row, and its key cell survives ghost stripping, so it is not proven empty.
+  assert_screen "an omp 18.18.8 fresh-session hint" pending "$CAPS_STYLED" "$hint"
+  assert_screen "an omp 18.18.8 fresh-session hint on a plain capture" unknown "$CAPS_PLAIN" "$hint"
+  # Rendered busy: the model's intent text replaces `Working…`, so every busy
+  # screen must read busy from the status row's spinner cell alone.
+  for name in busy working typed; do
+    screen=$(printf '%s\n' "${!name}" | fm_composer_strip_ansi | grep -v '⎋')
+    [ -n "$screen" ] || fail "omp 18.18.8 $name fixture is empty"
+    printf '%s' "$screen" | fm_busy_lines_match omp \
+      || fail "omp 18.18.8 $name screen must read busy from its status row"
+    LC_ALL=C fm_busy_lines_match omp <<<"$screen" \
+      || fail "omp 18.18.8 $name screen must read busy under LC_ALL=C"
+  done
+  for name in idle drafted popup settings picker hint; do
+    printf '%s\n' "${!name}" | fm_composer_strip_ansi | fm_busy_lines_match omp \
+      && fail "omp 18.18.8 $name screen must not read busy"
+  done
+  pass "matrix: omp 18.18.8 live screens keep their composer and busy verdicts"
+}
+
 # codex_cell <grey> <glyph>: one codex 0.154 starfield cell exactly as the
 # harness draws it - a truecolor grey foreground, the composer's grey
 # background, the braille glyph, then a reset.
@@ -1696,6 +1747,7 @@ test_matrix_cursor_reverse_video_placeholder_remnant
 test_matrix_cursor_fully_dim_placeholder
 test_matrix_herdr_halfblock_rule_bounds_bare_wrap
 test_matrix_omp_status_row_bounds_bare_composer
+test_matrix_omp_18_18_live_fixtures
 test_matrix_codex_idle_starfield_furniture
 test_matrix_pi_separated_needs_identity
 test_matrix_pi_dollar_status_footer_is_empty

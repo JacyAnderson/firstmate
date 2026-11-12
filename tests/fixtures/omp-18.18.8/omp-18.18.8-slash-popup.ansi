@@ -1,0 +1,13 @@
+ transcript line
+
+❯ [0m[38;2;229;229;231m/c[0m                                                                                                                                                   
+[0m[38;2;0;180;255m❯ 🖥  computer          Computer: off[0m                                                                                                                  [0m[38;2;0;180;255m█[0m
+  [0m[38;2;156;163;176m📡 [0mcollab[0m[38;2;156;163;176m            Collab: off[0m                                                                                                                    [0m[38;2;156;163;176m│[0m
+  [0m[38;2;156;163;176m⧉  [0mcopy[0m[38;2;156;163;176m              Pick text or code from the conversation to copy[0m                                                                                [0m[38;2;156;163;176m│[0m
+  [0m[38;2;156;163;176m📰 [0mchangelog[0m[38;2;156;163;176m         Show changelog entries[0m                                                                                                         [0m[38;2;156;163;176m│[0m
+  [0m[38;2;156;163;176m◫  [0mcontext[0m[38;2;156;163;176m           Context: 58% (579,695/1,000,000)[0m                                                                                               [0m[38;2;156;163;176m│[0m
+  [0m[38;2;156;163;176m🧹 [0mclear[0m[38;2;156;163;176m             Clear: drop context, keep session[0m                                                                                              [0m[38;2;156;163;176m│[0m
+  [0m[38;2;156;163;176m🗜  [0mcompact[0m[38;2;156;163;176m           Compact: context 58% used[0m                                                                                                      [0m[38;2;156;163;176m│[0m
+  [0m[38;2;156;163;176m🩺 [0mcleanse[0m[38;2;156;163;176m           Detect and fix project diagnostics with weighted parallel subagents[0m                                                            [0m[38;2;156;163;176m│[0m
+  [0m[38;2;156;163;176m🔌 [0mmcp[0m[38;2;156;163;176m               Manage MCP servers (add, list, remove, test)[0m                                                                                   [0m[38;2;156;163;176m│[0m
+  [0m[38;2;156;163;176m🧩 [0mfm-watch-arm-omp[0m[38;2;156;163;176m  Arm firstmate watcher supervision through the omp extension instead of foreground bash.[0m                                        [0m[38;2;156;163;176m│[0m

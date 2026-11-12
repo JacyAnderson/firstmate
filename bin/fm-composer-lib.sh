@@ -516,6 +516,8 @@ FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
 # leading braille spinner plus elapsed cell (`⠧ 11s`) is the second, independent
 # busy signal, so no single vendor string is load-bearing; its idle form is a
 # static identity glyph with no elapsed time.
+# On 18.18.8 the model's intent text replaces `Working…` for most of a turn
+# (`⎋ Draining wakes in full`), so the spinner cell carries those turns.
 # The spinner is an alternation of omp 18.1.11's unicode-preset frames (its
 # `status` set ⣾⣽⣻⢿⡿⣟⣯⣷ and `activity` set ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, read from the
 # build that rendered the live `⠧`), declared once for the busy regex and the
