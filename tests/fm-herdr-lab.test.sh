@@ -187,15 +187,18 @@ test_noisy_server_log_is_bounded() {
 }
 
 test_captured_provision_returns_promptly() {
-  local name="fm-lab-captured-$$" started elapsed pid
+  local name="fm-lab-captured-$$" started elapsed pid output status=0
   started=$(date +%s)
   # The server outlives provision. Command substitution waits for every
   # holder of the pipe to close it, so a collector that kept the caller's
   # stdout open would block until the server exits.
-  : "$(FM_FAKE_HERDR_SERVER_STAY=20 run_with_fake fm_herdr_lab_provision "$name" 2>&1)"
+  output=$(FM_FAKE_HERDR_SERVER_STAY=20 run_with_fake fm_herdr_lab_provision "$name" 2>&1) || status=$?
   elapsed=$(($(date +%s) - started))
   pid=$(cat "$FAKE_STATE/$name.pid" 2>/dev/null || true)
-  [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "captured provision failed: $output"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null \
+    || fail "the fake server was not running when provision returned, so the pipe was never held"
+  kill "$pid" 2>/dev/null || true
   [ "$elapsed" -lt 10 ] || fail "captured provision held its output pipe open for ${elapsed}s"
   run_with_fake fm_herdr_lab_teardown "$name" >/dev/null 2>&1 || true
   pass "fm-herdr-lab: provision does not hold a captured output pipe open"
