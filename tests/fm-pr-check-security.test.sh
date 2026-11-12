@@ -1575,6 +1575,24 @@ test_closed_poll_wakes_once_and_retires() {
   fm_pr_poll_degraded_already_notified "$state" task-a github github.com o/r 1 closed \
     && fail "explicit arming kept the closed marker"
 
+  dir=$(make_case closed-marker-removal-failure)
+  state="$dir/home/state"
+  rm -f "$dir/home/config/pr-degraded-watch"
+  write_poll_meta "$state" task-a "$url"
+  fm_pr_poll_degraded_mark_notified "$state" task-a github github.com o/r 1 closed \
+    || fail "could not seed the closed marker"
+  printf '#!/bin/sh\ncase "$*" in *pr-poll-degraded*) exit 1 ;; esac\nexec /bin/rm "$@"\n' > "$dir/fakebin/rm"
+  chmod 0755 "$dir/fakebin/rm"
+  FM_TEST_GH_STATE=OPEN run_check_entry "$dir" task-a "$url" > /dev/null 2> "$dir/arm.err" \
+    && fail "explicit arming succeeded although the closed marker could not be removed"
+  [ ! -e "$state/task-a.check.sh" ] || fail "a failed closed-marker removal still published a poll"
+  fm_pr_poll_degraded_already_notified "$state" task-a github github.com o/r 1 closed \
+    || fail "a failed closed-marker removal lost the marker"
+  rm -f "$dir/fakebin/rm"
+  FM_TEST_GH_STATE=OPEN run_check_entry "$dir" task-a "$url" > /dev/null 2> "$dir/arm.err" \
+    || fail "arming failed after the removal fault cleared: $(cat "$dir/arm.err")"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "arming after the removal fault cleared published no poll"
+
   dir=$(make_case closed-poll-queue-failure)
   state="$dir/home/state"
   write_poll_meta "$state" task-a "$url"

@@ -502,8 +502,12 @@ if [ -n "${BASELINE_BACKUP:-}" ]; then
     rm -f -- "$STATE/$ID.pr-poll-train" || baseline_failure
   fi
 fi
+if [ "${FM_PR_CHECK_SCAN:-0}" != 1 ] && ! fm_pr_poll_closed_marker_clear "$STATE" "$ID"; then
+  echo "error: could not clear the closed-request marker" >&2
+  [ -z "${BASELINE_BACKUP:-}" ] || baseline_failure
+  exit 1
+fi
 if fm_pr_poll_publish_prepared; then
-  [ "${FM_PR_CHECK_SCAN:-0}" = 1 ] || fm_pr_poll_closed_marker_clear "$STATE" "$ID" || true
   fm_lock_release "$PR_POLL_PUBLISH_LOCK" || { [ -z "${BASELINE_BACKUP:-}" ] || baseline_failure; exit 1; }
   PR_POLL_PUBLISH_LOCK_HELD=0
 else
