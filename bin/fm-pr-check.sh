@@ -370,6 +370,10 @@ if [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && [ "$DEGRADED_WATCH_ENABLED" = 1 ]; then
   CONTROL_LOCK="$STATE/.control-$ID.lock"
   fm_lock_acquire_wait "$CONTROL_LOCK" || exit 1
   CONTROL_LOCK_HELD=1
+  # The watcher may have retired the poll while this scan waited for the lock.
+  if [ "${FM_PR_CHECK_SCAN:-0}" = 1 ] && pr_check_pr_retired "$ID" "$URL"; then
+    exit 0
+  fi
   # The read runs under the control lock the watcher waits on, so it is
   # bounded by the watcher's own check bound.
   BASELINE_RC=0

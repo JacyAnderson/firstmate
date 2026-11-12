@@ -1611,6 +1611,44 @@ test_closed_poll_wakes_once_and_retires() {
   pass "a closed unmerged PR wakes once durably, retires, stays retired under the scan, and re-arms explicitly"
 }
 
+test_scan_arming_rechecks_retirement_after_the_control_lock() {
+  local dir state url=https://github.com/o/r/pull/7 pid holder rc i
+  dir=$(make_case scan-retired-while-waiting)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a "$url" 'kind=ship' 'mode=no-mistakes'
+  cat > "$dir/control-holder.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+. "$FM_TEST_ROOT/bin/fm-wake-lib.sh"
+trap 'fm_lock_release "$FM_TEST_LOCK" || true' EXIT
+fm_lock_acquire_wait "$FM_TEST_LOCK"
+: > "$FM_TEST_ACQUIRED"
+while [ ! -e "$FM_TEST_RELEASE" ]; do sleep 0.01; done
+SH
+  chmod +x "$dir/control-holder.sh"
+  FM_TEST_ROOT="$ROOT" FM_TEST_LOCK="$state/.control-task-a.lock" \
+    FM_TEST_ACQUIRED="$dir/holder-acquired" FM_TEST_RELEASE="$dir/holder-release" \
+    "$dir/control-holder.sh" &
+  holder=$!
+  for i in $(seq 1 500); do
+    [ -e "$dir/holder-acquired" ] && break
+    sleep 0.01
+  done
+  [ -e "$dir/holder-acquired" ] || fail "the control lock holder never acquired the lock"
+  FM_PR_CHECK_SCAN=1 FM_TEST_GH_STATE=CLOSED run_check_entry "$dir" task-a "$url" > /dev/null 2> "$dir/scan.err" &
+  pid=$!
+  sleep 1
+  fm_pr_poll_degraded_mark_notified "$state" task-a github github.com o/r 7 closed \
+    || fail "could not write the closed marker"
+  : > "$dir/holder-release"
+  wait "$holder" || fail "the control lock holder failed"
+  rc=0
+  wait "$pid" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the waiting scan failed: $(cat "$dir/scan.err")"
+  [ ! -e "$state/task-a.check.sh" ] || fail "a scan republished a poll that was retired while it waited for the lock"
+  pass "a scan re-checks retirement once it holds the control lock"
+}
+
 test_comment_watch_github() {
   local dir state out wm
   dir=$(make_case comment-watch-github)
@@ -5420,6 +5458,7 @@ test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_closed_poll_wakes_once_and_retires
+test_scan_arming_rechecks_retirement_after_the_control_lock
 test_comment_watch_github
 test_comment_watch_gitlab
 test_comment_watch_watcher_and_rearm
