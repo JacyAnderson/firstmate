@@ -498,7 +498,8 @@
 # Worker tool exclusions:
 #   docs/configuration.md "Worker tool exclusions" owns config/crew-exclude-tools
 #   and its operator contract. Resolve it with bin/fm-exclude-tools-lib.sh
-#   before provisioning; __PIEXCLUDE__ below owns the Pi launch substitution.
+#   before provisioning; __PIEXCLUDE__ and __CLAUDEEXCLUDE__ below own the Pi and
+#   Claude launch substitutions.
 # Worker account pin (config/claude-account, config/pi-account):
 #   Opt-in. docs/configuration.md's "Worker account pin" section owns unpinned
 #   account selection. A present file pins every supported launch of
@@ -547,6 +548,12 @@
 #     __PIEXCLUDE__ optional ` --exclude-tools '<comma-joined names>'` from
 #                  config/crew-exclude-tools on Pi/pi-signed ship and scout
 #                  launches (supplies its own leading space, empty otherwise)
+#     __CLAUDEEXCLUDE__ optional `--disallowedTools '<comma-joined names>' ` from
+#                  config/crew-exclude-tools on Claude ship and scout launches
+#                  (supplies its own trailing space, empty otherwise). Claude
+#                  Code drops a disallowed tool's schema from every request, and
+#                  a later flag always follows so the variadic option cannot
+#                  swallow the launch prompt.
 #     __PIRESUME__ optional relaunch-only `--session <reference>` that keeps a
 #                  Pi replacement on the session the endpoint's runtime already
 #                  reports (relaunch_resume_args below owns it; it supplies its
@@ -2979,6 +2986,7 @@ launch_template() {
   claude)
     printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude __CLAUDEPERMFLAG__ __CLAUDEADDDIRS__--settings __CLAUDESETTINGS__ '
     if [ "$kind" != secondmate ]; then
+      printf '%s' '__CLAUDEEXCLUDE__'
       printf '%s' "--append-system-prompt '$(spawn_claude_task_channel_statement)' "
     fi
     # Claude Code strips invisible characters, U+2063 included, from the
@@ -3615,6 +3623,10 @@ if [ "$BACKEND" = t3code ]; then
   fi
   if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     echo "error: backend=t3code cannot apply config/launch-env-allowlist because T3 starts the agent with its provider instance's environment; remove that file or choose another backend" >&2
+    exit 1
+  fi
+  if [ -n "$EXCLUDE_TOOLS" ]; then
+    echo "error: backend=t3code cannot apply config/crew-exclude-tools because T3 starts the agent without Firstmate's tool flags; empty that file or choose another backend" >&2
     exit 1
   fi
   if [ -n "$WORKER_ACCOUNT" ]; then
@@ -7612,6 +7624,9 @@ if [ "$RELAUNCH" -eq 1 ]; then
 fi
 LAUNCH=${LAUNCH//__PIRESUME__/$RESUME_ARGS}
 LAUNCH=${LAUNCH//__CLAUDEPERMFLAG__/$CLAUDE_PERM_FLAG}
+CLAUDE_EXCLUDE=
+[ -z "$EXCLUDE_TOOLS" ] || [ "$HARNESS" != claude ] || CLAUDE_EXCLUDE="--disallowedTools $(shell_quote "$EXCLUDE_TOOLS") "
+LAUNCH=${LAUNCH//__CLAUDEEXCLUDE__/$CLAUDE_EXCLUDE}
 case "$LAUNCH" in
 *__CLAUDESETTINGS__*)
   if [ "$KIND" = secondmate ]; then

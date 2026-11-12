@@ -4713,6 +4713,50 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
   pass "AFK changed paused panes hand off plain stale identities for daemon-owned pause triage"
 }
 
+# The away watcher hands each stale hash to the daemon once. A pane that went
+# idle under the previous away session and never changed must still reach the
+# next session's daemon, or that daemon never opens a stale episode for it.
+test_afk_fresh_entry_rehands_an_unchanged_idle_pane() {
+  local dir state fakebin out capture_file statusf window key pid
+  dir=$(make_case afk-fresh-entry-idle); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-afk-idle"
+  printf 'idle prompt\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/afk-idle.meta"
+  statusf="$state/afk-idle.status"
+  printf 'working: still preparing the result\n' > "$statusf"
+  printf '%s' "$(seen_sig "$statusf")" > "$state/.seen-afk-idle_status"
+  date '+%s' > "$state/.afk"
+  key=$(watch_window_key "$window")
+  # The previous session already handed this exact hash over and its daemon
+  # held the episode.
+  printf '%s' "$(hash_text "$(cat "$capture_file")")" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$(hash_text "$(cat "$capture_file")")" > "$state/.stale-$key"
+  printf '%s\n' $(( $(date +%s) - 300 )) > "$state/.subsuper-stale-afk-idle"
+  afk_idle_watch() {
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    pid=$!
+  }
+
+  afk_idle_watch
+  if ! wait_poll_cycle "$state" "$pid"; then
+    fail "the already-handed idle pane woke inside the same session: $(cat "$out")"
+  fi
+  reap "$pid"
+  [ ! -s "$out" ] || fail "the already-handed idle pane was handed over twice in one session: $(cat "$out")"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the stopped same-session watcher"
+
+  FM_HOME="$dir" FM_STATE_OVERRIDE="$state" \
+    bash -c '. "$1"; fm_afk_clear_stale_artifacts "$2"' _ "$ROOT/bin/fm-afk-start.sh" "$state"
+  [ ! -e "$state/.subsuper-stale-afk-idle" ] || fail "fresh entry kept the prior daemon's stale episode"
+  afk_idle_watch
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "the next session never heard about the unchanged idle pane"; }
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "the fresh-entry hand-off was not a plain stale wake: $(cat "$out")"
+  pass "a fresh away entry hands an unchanged idle pane to the new daemon"
+}
+
 test_pi_stream_silence_uses_inspection_timer() {
   local dir state fakebin out capture_file window key gen snapshot pid mode enabled
   for mode in enabled disabled negative invalid_option leading maximum overflow closed foreign fresh malformed stale resumed racing; do
@@ -5560,6 +5604,7 @@ fm_test_run \
   test_afk_signal_records_heartbeat_endpoint \
   test_afk_present_reverts_watcher_to_one_shot \
   test_afk_paused_changed_pane_hands_off_plain_stale \
+  test_afk_fresh_entry_rehands_an_unchanged_idle_pane \
   test_exit_picker_stale_names_the_dialog \
   test_exit_picker_wedge_keeps_climbing \
   test_quoted_exit_picker_stays_ordinary_stale \
