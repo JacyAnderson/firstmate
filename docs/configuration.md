@@ -1312,7 +1312,7 @@ The seeded home's `data/charter.md` owns the standard secondmate lifecycle and e
 Each seed writes an `.fm-secondmate-home` identity marker at the home root, alongside a durable `.fm-secondmate-parent` record of the home's route to its parent (see "Provision a route" in [`docs/remote-secondmates.md`](remote-secondmates.md)).
 The tracked root `.gitignore` ignores both markers, so validation can read them without making a freshly seeded home appear dirty to porcelain-based safety checks.
 
-This does not relax protection for any other untracked file.
+This does not relax protection for tracked edits or staged changes, and an untracked file still blocks a fast-forward when an incoming commit adds a colliding path; other untracked files no longer do (see the header of [`bin/fm-ff-lib.sh`](../bin/fm-ff-lib.sh)).
 An existing linked-worktree home that predates this rule advances through its marker-only state during its next bootstrap or spawn local sync, after which Git ignores the marker normally.
 
 A local standalone-clone home cannot receive a primary-local commit through that no-fetch sync, so it receives the rule through `/updatefirstmate` instead.

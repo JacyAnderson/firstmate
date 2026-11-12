@@ -318,6 +318,186 @@ test_dirty_secondmate_skipped() {
   pass "T4 dirty secondmate skipped, local edit preserved"
 }
 
+# --- T4b: untracked dirt only blocks the update when it collides ------------
+# Advance origin by one commit that adds tracked paths: a file, a file under a
+# directory, and a file that a local untracked directory/file can shadow.
+bump_origin_adding() {
+  local w=$1 path
+  git -C "$w/seed" pull -q origin main >/dev/null 2>&1 || true
+  shift
+  for path in "$@"; do
+    mkdir -p "$w/seed/$(dirname "$path")"
+    printf 'incoming\n' > "$w/seed/$path"
+  done
+  printf 'r-add\n' >> "$w/seed/README.md"
+  git -C "$w/seed" add -A
+  git -C "$w/seed" commit -qm bump-add
+  git -C "$w/seed" push -q origin main
+}
+
+test_untracked_dirt_tolerated_unless_colliding() {
+  local w out before
+
+  w=$(new_world t4b-clean)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" "a clean home still updates"
+
+  w=$(new_world t4b-untracked)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  printf 'mine\n' > "$w/sm1/skills-lock.json"
+  mkdir -p "$w/sm1/.agents/skills/local/deep" "$w/sm1/other/nested/dir"
+  printf 'mine\n' > "$w/sm1/.agents/skills/local/deep/SKILL.md"
+  printf 'mine\n' > "$w/sm1/other/nested/dir/x"
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" "non-colliding untracked paths do not block the update"
+  assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$(git -C "$w/main" rev-parse origin/main)" \
+    "the home reached the incoming commit"
+  grep -q mine "$w/sm1/skills-lock.json" || fail "untracked file was disturbed"
+  grep -q mine "$w/sm1/.agents/skills/local/deep/SKILL.md" || fail "untracked nested file was disturbed"
+
+  w=$(new_world t4b-file)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" clash.txt
+  printf 'mine\n' > "$w/sm1/clash.txt"
+  before=$(git -C "$w/sm1" rev-parse HEAD)
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: untracked clash.txt collides" \
+    "a colliding untracked file is refused and named"
+  assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$before" "a colliding home was moved"
+  grep -q mine "$w/sm1/clash.txt" || fail "colliding untracked file was discarded"
+
+  w=$(new_world t4b-dir)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/deep/incoming.txt
+  mkdir -p "$w/sm1/new/deep"
+  printf 'mine\n' > "$w/sm1/new/deep/other.txt"
+  before=$(git -C "$w/sm1" rev-parse HEAD)
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" \
+    "a sibling file in a wholly untracked directory does not block the update"
+  grep -q mine "$w/sm1/new/deep/other.txt" || fail "untracked sibling was disturbed"
+
+  w=$(new_world t4b-dirobstruct)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  mkdir -p "$w/sm1/new"
+  printf 'mine\n' > "$w/sm1/new"/x
+  git -C "$w/sm1" config status.showUntrackedFiles no
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" \
+    "a sibling in an untracked directory updates whatever status.showUntrackedFiles says"
+
+  w=$(new_world t4b-fileoverdir)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  printf 'mine\n' > "$w/sm1/new"
+  before=$(git -C "$w/sm1" rev-parse HEAD)
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: untracked new collides" \
+    "an untracked file where an incoming directory goes is refused and named"
+  assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$before" "a colliding home was moved"
+
+  w=$(new_world t4b-numeric)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" 1
+  printf 'mine\n' > "$w/sm1/01"
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: updated" "01 and 1 are distinct paths"
+
+  local n=0
+  for name in $'clash\nname' 'clash\name'; do
+    n=$((n + 1))
+    w=$(new_world "t4b-odd$n")
+    add_sm "$w" sm1
+    bump_origin_adding "$w" "$name"
+    printf 'mine\n' > "$w/sm1/$name"
+    before=$(git -C "$w/sm1" rev-parse HEAD)
+    out=$(run_update "$w")
+    assert_contains "$out" "skipped: untracked $(printf '%q' "$name") collides" \
+      "an unusual colliding name is named byte for byte"
+    assert_equals "$(git -C "$w/sm1" rev-parse HEAD)" "$before" "a colliding home was moved"
+  done
+
+  w=$(new_world t4b-case)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" Case.txt
+  printf 'mine\n' > "$w/sm1/case.txt"
+  if [ -e "$w/sm1/Case.txt" ]; then
+    out=$(run_update "$w")
+    assert_contains "$out" "fast-forward failed" "a case-only collision is refused"
+    assert_contains "$out" "Case.txt" "git's offending path is kept in the message"
+  fi
+
+  w=$(new_world t4b-casenl)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" $'Clash\nname'
+  printf 'mine\n' > "$w/sm1/"$'clash\nname'
+  if [ -e "$w/sm1/"$'Clash\nname' ]; then
+    out=$(run_update "$w")
+    assert_contains "$out" "Clash name" "a case-only collision on a newline name is named in full"
+  fi
+
+  w=$(new_world t4b-shadow)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" shadow
+  mkdir -p "$w/sm1/shadow"
+  printf 'mine\n' > "$w/sm1/shadow/x"
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: untracked shadow/x collides" \
+    "an untracked directory shadowing an incoming file is refused"
+
+  w=$(new_world t4b-staged)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  printf 'staged\n' > "$w/sm1/staged.txt"
+  git -C "$w/sm1" add staged.txt
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: dirty working tree" "a staged path still refuses"
+
+  w=$(new_world t4b-mixed)
+  add_sm "$w" sm1
+  bump_origin_adding "$w" new/incoming.txt
+  printf 'untracked\n' > "$w/sm1/zz-untracked.txt"
+  printf 'edit\n' >> "$w/sm1/AGENTS.md"
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: dirty working tree" \
+    "a tracked edit refuses even alongside tolerated untracked paths"
+  pass "T4b untracked dirt is tolerated unless it collides with the incoming range"
+}
+
+# A redundant divergence whose reconciliation hits a case-only untracked
+# collision keeps git's diagnostic, so the path is named.
+test_redundant_divergence_collision_named() {
+  local w out branch_base local_tip
+  w=$(new_world t5c)
+  add_sm "$w" sm1
+  branch_base=$(git -C "$w/sm1" rev-parse HEAD)
+  printf 'v2\n' > "$w/sm1/AGENTS.md"
+  git -C "$w/sm1" add AGENTS.md
+  git -C "$w/sm1" commit -qm local-instructions
+  local_tip=$(git -C "$w/sm1" rev-parse HEAD)
+  bump_origin "$w" readme
+  out=$(run_update "$w")
+  assert_contains "$out" "secondmate sm1: skipped: diverged from origin/main" \
+    "unique local work was not initially protected"
+
+  git -C "$w/sm1" diff "$branch_base" "$local_tip" | git -C "$w/seed" apply
+  printf 'incoming\n' > "$w/seed/Clash.txt"
+  git -C "$w/seed" add -A
+  git -C "$w/seed" commit -qm squash-local-contribution
+  git -C "$w/seed" push -q origin main
+  printf 'mine\n' > "$w/sm1/clash.txt"
+  if [ -e "$w/sm1/Clash.txt" ]; then
+    out=$(run_update "$w")
+    assert_contains "$out" "could not be reconciled with reset --keep" "the collision refuses reconciliation"
+    assert_contains "$out" "Clash.txt" "reset --keep's offending path is kept in the message"
+  fi
+  pass "T5c a redundant-divergence collision is refused with the path named"
+}
+
 # --- T5: diverged secondmate is skipped, its commit preserved --------------
 test_diverged_secondmate_skipped() {
   local w out before marker second_out
@@ -698,8 +878,10 @@ test_unprovable_runtime_gets_fallback_nudge
 test_dead_secondmate_gets_no_action
 test_legacy_remote_advance_restarts
 test_dirty_secondmate_skipped
+test_untracked_dirt_tolerated_unless_colliding
 test_diverged_secondmate_skipped
 test_squash_merged_divergence_reconciles
+test_redundant_divergence_collision_named
 test_already_current_secondmate_still_restarts
 test_already_current_unprovable_mate_is_nudged
 test_registry_backstop_dedup_and_self_exclusion

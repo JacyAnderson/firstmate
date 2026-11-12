@@ -28,8 +28,10 @@
 # (data/, state/, config/, projects/, .no-mistakes/), so it cannot disturb a
 # secondmate's backlog, projects, or in-flight work.
 # The seeded .fm-secondmate-home identity marker is gitignored too; the local
-# sync tolerates only that marker during the one-time upgrade of pre-ignore
+# sync tolerates that marker during the one-time upgrade of pre-ignore
 # linked-worktree homes.
+# Untracked paths in general never block a fast-forward unless one collides with
+# a path the incoming commits add; tracked edits and staged changes always do.
 # A clean secondmate divergence is reconciled only when a three-way tree proof
 # shows that its complete local result is already present in the target, as
 # happens after an upstream squash merge. Every other divergence stays put and
@@ -45,6 +47,11 @@ SUB_HOME_MARKER="${SUB_HOME_MARKER:-.fm-secondmate-home}"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-secondmate-registry-lib.sh"
 
 # --- helpers ---------------------------------------------------------------
+
+# Git's whole diagnostic on one line, so a path containing a newline survives.
+flat_diag() {
+  printf '%s' "$1" | tr '\n\t' '  ' | sed 's/  */ /g'
+}
 
 first_line() {
   printf '%s\n' "$1" | sed -n '1s/[[:space:]]\{1,\}/ /g;1p'
@@ -270,13 +277,39 @@ remote_inherit_failure_reason() { # <output>
   fi
 }
 
+# Print the first thing that makes <dir> unsafe to fast-forward, or nothing.
+# Without <base> any porcelain line counts. With <base>, only tracked changes and
+# untracked leaf paths that equal, sit under, or contain a path in HEAD..<base>
+# count, printed as "?? <shell-quoted path>". Paths stay NUL-delimited and are
+# compared as literal strings, independent of status display settings.
 dirty_status() {
-  local dir=$1 ignore_seed_marker=${2:-no}
-  if [ "$ignore_seed_marker" = yes ]; then
-    git -C "$dir" status --porcelain 2>/dev/null | awk -v marker="?? $SUB_HOME_MARKER" '$0 != marker { print; exit }'
-  else
-    git -C "$dir" status --porcelain 2>/dev/null | head -1
+  local dir=$1 ignore_seed_marker=${2:-no} base=${3:-} line incoming=() untracked=() path i u
+  if [ -z "$base" ]; then
+    if [ "$ignore_seed_marker" = yes ]; then
+      git -C "$dir" status --porcelain 2>/dev/null | awk -v marker="?? $SUB_HOME_MARKER" '$0 != marker { print; exit }'
+    else
+      git -C "$dir" status --porcelain 2>/dev/null | head -1
+    fi
+    return 0
   fi
+  line=$(git -C "$dir" status --porcelain --untracked-files=no 2>/dev/null | head -1)
+  if [ -n "$line" ]; then
+    printf '%s\n' "$line"
+    return 0
+  fi
+  while IFS= read -r -d '' path; do incoming+=("$path"); done \
+    < <(git -C "$dir" diff --name-only -z HEAD "$base" 2>/dev/null)
+  while IFS= read -r -d '' path; do untracked+=("$path"); done \
+    < <(git -C "$dir" ls-files --others --exclude-standard -z 2>/dev/null)
+  for u in ${untracked[@]+"${untracked[@]}"}; do
+    [ "$ignore_seed_marker" = yes ] && [ "$u" = "$SUB_HOME_MARKER" ] && continue
+    for i in ${incoming[@]+"${incoming[@]}"}; do
+      if [[ $u == "$i" || $u == "$i"/* || $i == "$u"/* ]]; then
+        printf '?? %q\n' "$u"
+        return 0
+      fi
+    done
+  done
 }
 
 secondmate_update_reconcile_marker_path() { # <state> <id>
@@ -406,7 +439,7 @@ ff_target() {
     return 0
   fi
 
-  local default base cur instr local_rev base_rev before after out
+  local default base cur instr local_rev base_rev before after out dirty
   default=$(default_branch "$dir") || {
     echo "$label: skipped: cannot determine default branch"
     return 0
@@ -446,7 +479,11 @@ ff_target() {
     return 0
   fi
 
-  if [ -n "$(dirty_status "$dir" "$ignore_seed_marker")" ]; then
+  dirty=$(dirty_status "$dir" "$ignore_seed_marker" "$base")
+  if [ "${dirty:0:3}" = '?? ' ]; then
+    echo "$label: skipped: untracked ${dirty:3} collides with the incoming update"
+    return 0
+  elif [ -n "$dirty" ]; then
     echo "$label: skipped: dirty working tree"
     return 0
   fi
@@ -470,7 +507,7 @@ ff_target() {
       && divergence_is_redundant "$dir" "$local_rev" "$base_rev"; then
       instr=$(changed_instr "$dir" "$base")
       before=$(git -C "$dir" rev-parse --short HEAD)
-      if git -C "$dir" reset --keep "$base" >/dev/null 2>&1; then
+      if out=$(git -C "$dir" reset --keep "$base" 2>&1); then
         after=$(git -C "$dir" rev-parse --short HEAD)
         FF_STATUS="updated"
         FF_INSTR="$instr"
@@ -482,7 +519,7 @@ ff_target() {
         fi
         return 0
       fi
-      echo "$label: skipped: redundant divergence could not be reconciled with reset --keep"
+      echo "$label: skipped: redundant divergence could not be reconciled with reset --keep: $(flat_diag "$out")"
       return 0
     fi
     if [ -n "$secondmate_id" ] && [ -n "$reconciliation_state" ]; then
@@ -501,7 +538,9 @@ ff_target() {
   instr=$(changed_instr "$dir" "$base")
   before=$(git -C "$dir" rev-parse --short HEAD)
   if ! out=$(git -C "$dir" merge --ff-only "$base" 2>&1); then
-    echo "$label: skipped: fast-forward failed: $(first_line "$out")"
+    # The full diagnostic names a collision the preflight cannot see, such as a
+    # case-only one on a case-insensitive filesystem.
+    echo "$label: skipped: fast-forward failed: $(flat_diag "$out")"
     return 0
   fi
   after=$(git -C "$dir" rev-parse --short HEAD)
