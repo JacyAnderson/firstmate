@@ -396,7 +396,8 @@ unit_per_task_markers_session_scoped() {
       inject_msg() { return 0; }
       inject_wedge_alarm() { return 0; }
       housekeeping "$2"
-    ' _ "$ROOT/bin/fm-supervise-daemon.sh" "$state"
+    ' _ "$ROOT/bin/fm-supervise-daemon.sh" "$state" \
+    || fail "session scope: the new daemon's first housekeeping pass failed"
   if ! grep -q 'possible wedge' "$state/.subsuper-escalations" 2>/dev/null; then
     pass "session scope: a dead session's idle clock cannot report 'possible wedge' in the next session"
   else
