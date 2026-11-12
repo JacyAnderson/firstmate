@@ -517,8 +517,7 @@ FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
 # busy signal, so no single vendor string is load-bearing; its idle form is a
 # static identity glyph with no elapsed time.
 # On 18.18.8 the model's intent text replaces `Working…` for most of a turn
-# (`⎋ Draining wakes in full`). That `⎋` row is not matched: a plain capture
-# cannot tell it from quoted output, so the spinner cell carries those turns.
+# (`⎋ Draining wakes in full`), so the spinner cell carries those turns.
 # The spinner is an alternation of omp 18.1.11's unicode-preset frames (its
 # `status` set ⣾⣽⣻⢿⡿⣟⣯⣷ and `activity` set ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, read from the
 # build that rendered the live `⠧`), declared once for the busy regex and the
@@ -677,16 +676,11 @@ FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
 # a wrapped typed row such as `fix · tests` stays composer input; the ascii
 # preset's `pi` is deliberately absent because that preset's `sep.dot` is
 # ` - `, so its status row never carries a middle dot and a `pi ·` alternative
-# could only ever match typed text), or when it opens with one of omp's spinner
-# frames then an elapsed cell. It is consulted only as the boundary BELOW a
-# bare composer, never on the composer row itself. A context cell alone
-# (`◫ 53.9%/1M`) proves nothing there, because a wrapped draft can carry the
-# same text, so a status row that opens with a focused subagent's id stays input.
-FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)'
-# Below a proven envelope a context-cell row still counts as footer furniture
-# (_fm_composer_row_is_composer_furniture): demoting the rows under an envelope
-# only keeps that envelope selected, so it can refuse but never read a draft out.
-FM_COMPOSER_OMP_CONTEXT_RE_DEFAULT='[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+(\.[0-9]+)?[KM]'
+# could only ever match typed text), when it opens with one of omp's spinner
+# frames then an elapsed cell, or when it carries the context-usage cell after
+# a middle dot. It is consulted only as the boundary BELOW a bare composer,
+# never on the composer row itself.
+FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)|[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+K'
 # Pi's footer stats row opens at column 0 with the session cost when every
 # token counter is zero (`$0.000 (sub) 5.4%/272k (auto)` on pi 0.85.1).
 # That leading `$` is a cost cell, not a dead-shell prompt, only when a digit
@@ -1876,7 +1870,6 @@ _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
   local row=$1 proof=$2 glyph=''
   [ -n "$row" ] || return 1
   _fm_composer_row_is_omp_status "$row" && return 0
-  fm_composer_idle_matches "$row" "$FM_COMPOSER_OMP_CONTEXT_RE_DEFAULT" sensitive && return 0
   _fm_composer_row_is_braille_furniture "$row" && return 0
   fm_composer_idle_matches "$row" \
     "${FM_COMPOSER_MODE_HINT_RE:-$FM_COMPOSER_MODE_HINT_RE_DEFAULT}" sensitive && return 0
