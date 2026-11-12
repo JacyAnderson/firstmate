@@ -23,7 +23,7 @@
 # state-file copy. Control relaunch metadata may follow the preserved PR identity
 # fields.
 #
-# A validated exact merged result is retired through a private receipt only
+# A validated exact merged or closed result is retired through a private receipt only
 # after its durable wake is appended.
 # The receipt binds the terminal observation to the canonical registration and
 # lets a restart finish fixed-path removal without executing state-file bytes.
@@ -945,6 +945,7 @@ fm_pr_poll_retirement_parse() {
   FM_PR_RETIRE_CHECK_IDENTITY=
   FM_PR_RETIRE_REG_HASH=
   FM_PR_RETIRE_REG_IDENTITY=
+  FM_PR_RETIRE_RESULT=
   [ -f "$file" ] && [ ! -L "$file" ] || return 1
   exec 9< "$file" || return 1
   IFS= read -r version <&9 || { exec 9<&-; return 1; }
@@ -979,7 +980,7 @@ fm_pr_poll_retirement_parse() {
   [[ "$check_identity" =~ ^[0-9]+:[0-9]+$ ]] || return 1
   [[ "$reg_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
   [[ "$reg_identity" =~ ^[0-9]+:[0-9]+$ ]] || return 1
-  [ "$result" = merged ] || return 1
+  [ "$result" = merged ] || [ "$result" = closed ] || return 1
   FM_PR_RETIRE_ID=$id
   FM_PR_RETIRE_PROVIDER=$provider
   FM_PR_RETIRE_URL=$url
@@ -992,6 +993,7 @@ fm_pr_poll_retirement_parse() {
   FM_PR_RETIRE_CHECK_IDENTITY=$check_identity
   FM_PR_RETIRE_REG_HASH=$reg_hash
   FM_PR_RETIRE_REG_IDENTITY=$reg_identity
+  FM_PR_RETIRE_RESULT=$result
 }
 
 fm_pr_poll_retirement_receipt_valid() {
@@ -1429,7 +1431,7 @@ fm_pr_poll_retirement_discard_obsolete() {
 
 fm_pr_poll_retirement_publish() {
   local state=$1 id=$2 template=$3 result=$4 receipt state_device tmp
-  [ "$result" = merged ] || return 1
+  [ "$result" = merged ] || [ "$result" = closed ] || return 1
   fm_pr_poll_snapshot_matches "$state" "$id" "$template" || return 1
   state_device=$(fm_pr_file_device "$state") || return 1
   receipt="$state/$id.pr-poll-retirement"
@@ -1451,7 +1453,7 @@ fm_pr_poll_retirement_publish() {
       "$FM_PR_POLL_SNAPSHOT_CHECK_IDENTITY" \
       "$FM_PR_POLL_SNAPSHOT_REG_HASH" \
       "$FM_PR_POLL_SNAPSHOT_REG_IDENTITY" \
-      merged > "$tmp" \
+      "$result" > "$tmp" \
     || ! chmod 0600 "$tmp" \
     || ! fm_pr_private_file_valid "$tmp" 600 "$state_device" \
     || ! fm_pr_poll_retirement_parse "$tmp" \
@@ -1625,7 +1627,7 @@ fm_pr_poll_degraded_identity_valid() {  # <identity>
       esac
       [ "${#value}" -le 18 ] || return 1
       ;;
-    train=on|train=dropped) ;;
+    train=on|train=dropped|closed) ;;
     *) return 1 ;;
   esac
 }
@@ -1695,6 +1697,18 @@ fm_pr_poll_degraded_mark_notified() {  # <state> <id> <provider> <host> <path> <
     rm -f -- "$tmp"
     return 1
   fi
+}
+
+# A closed-unmerged retirement leaves this marker with identity "closed" so the
+# registration scan (bin/fm-pr-check.sh) does not re-arm the abandoned request.
+# An explicit arming clears it; any other identity is left alone.
+fm_pr_poll_closed_marker_clear() {  # <state> <id>
+  local state=$1 id=$2 marker
+  fm_pr_task_id_valid "$id" || return 1
+  marker="$state/$id.pr-poll-degraded"
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 0
+  [ "$(sed -n 6p "$marker")" = closed ] || return 0
+  rm -f -- "$marker"
 }
 
 # Removed at teardown alongside the other per-task PR-poll artifacts

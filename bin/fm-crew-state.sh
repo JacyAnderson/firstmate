@@ -534,6 +534,7 @@ passed_pr_detail() {
     return
   fi
   if fm_pr_poll_retirement_receipt_valid "$STATE" "$ID" \
+    && [ "$FM_PR_RETIRE_RESULT" = merged ] \
     && [ "$FM_PR_RETIRE_PROVIDER" = "$provider" ] \
     && [ "$FM_PR_RETIRE_URL" = "$url" ] \
     && [ "$FM_PR_RETIRE_HOST" = "$host" ] \

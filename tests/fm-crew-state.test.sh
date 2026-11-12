@@ -415,8 +415,8 @@ reset_fakes() {
   export FM_FAKE_STATUS_APPEND_FILE FM_FAKE_STATUS_APPEND_MARKER FM_FAKE_STATUS_APPEND_LINE
 }
 
-seed_retired_pr_receipt() {  # <state> <id> <url>
-  local state=$1 id=$2 url=$3 template provider host path number
+seed_retired_pr_receipt() {  # <state> <id> <url> [merged|closed]
+  local state=$1 id=$2 url=$3 result=${4:-merged} template provider host path number
   template="$ROOT/bin/fm-pr-poll.sh"
   fm_pr_url_parse "$url" || fail "retirement fixture URL was invalid"
   provider=$FM_PR_PROVIDER
@@ -427,7 +427,7 @@ seed_retired_pr_receipt() {  # <state> <id> <url>
     || fail "could not prepare retirement fixture"
   fm_pr_poll_publish_prepared || fail "could not publish retirement fixture"
   fm_pr_poll_snapshot_capture "$state" "$id" "$template" || fail "could not snapshot retirement fixture"
-  fm_pr_poll_retirement_publish "$state" "$id" "$template" merged \
+  fm_pr_poll_retirement_publish "$state" "$id" "$template" "$result" \
     || fail "could not publish retirement receipt"
 }
 
@@ -1625,6 +1625,23 @@ test_terminal_passed_uses_matching_retirement_receipt_without_forge() {
   assert_contains "$out" "run passed: PR merged" "matching retirement receipt is local merged evidence"
   [ ! -s "$read_log" ] || fail "matching retirement receipt still attempted a forge read"
   pass "terminal passed run uses matching retirement receipt without forge"
+}
+
+test_terminal_passed_closed_receipt_is_not_merged_evidence() {
+  reset_fakes
+  local d url out
+  d=$(new_case passed-closed-receipt)
+  url=https://github.com/o/r/pull/1
+  make_repo_on_branch "$d/wt" fm/feat-dclosed
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dclosed.meta" "window=fm:fm-feat-dclosed" \
+    "worktree=$d/wt" "kind=ship" "pr=$url"
+  seed_retired_pr_receipt "$d/state" feat-dclosed "$url" closed
+  FM_FAKE_PR_READ_FAIL=1
+  FM_FAKE_AXI_STATUS="$(run_passed_no_pr fm/feat-dclosed)"
+  out=$(run_crew_state "$d" feat-dclosed)
+  case $out in *"PR merged"*) fail "a closed-PR retirement receipt was read as merged" ;; esac
+  pass "terminal passed run does not treat a closed-PR receipt as merged"
 }
 
 test_terminal_passed_no_forge_switch_skips_read_but_keeps_receipt() {
@@ -6797,6 +6814,7 @@ test_terminal_passed
 test_terminal_passed_with_override
 test_terminal_passed_with_skips
 test_terminal_passed_uses_matching_retirement_receipt_without_forge
+test_terminal_passed_closed_receipt_is_not_merged_evidence
 test_terminal_passed_no_forge_switch_skips_read_but_keeps_receipt
 test_terminal_passed_with_open_pr_does_not_claim_merged
 test_terminal_passed_run_pr_overrides_stale_metadata

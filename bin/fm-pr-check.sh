@@ -104,6 +104,7 @@ pr_check_rotate() {  # <last-id>: start the lines on stdin just after the line f
 pr_check_pr_retired() {  # <id> <recorded-url>
   [ -n "$2" ] && fm_pr_url_parse "$2" || return 1
   fm_pr_poll_merge_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" && return 0
+  fm_pr_poll_degraded_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" closed && return 0
   fm_pr_poll_retirement_parse "$STATE/$1.pr-poll-retirement" && [ "$FM_PR_RETIRE_URL" = "$2" ]
 }
 
@@ -369,6 +370,10 @@ if [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && [ "$DEGRADED_WATCH_ENABLED" = 1 ]; then
   CONTROL_LOCK="$STATE/.control-$ID.lock"
   fm_lock_acquire_wait "$CONTROL_LOCK" || exit 1
   CONTROL_LOCK_HELD=1
+  # The watcher may have retired the poll while this scan waited for the lock.
+  if [ "${FM_PR_CHECK_SCAN:-0}" = 1 ] && pr_check_pr_retired "$ID" "$URL"; then
+    exit 0
+  fi
   # The read runs under the control lock the watcher waits on, so it is
   # bounded by the watcher's own check bound.
   BASELINE_RC=0
@@ -500,6 +505,11 @@ if [ -n "${BASELINE_BACKUP:-}" ]; then
   else
     rm -f -- "$STATE/$ID.pr-poll-train" || baseline_failure
   fi
+fi
+if [ "${FM_PR_CHECK_SCAN:-0}" != 1 ] && ! fm_pr_poll_closed_marker_clear "$STATE" "$ID"; then
+  echo "error: could not clear the closed-request marker" >&2
+  [ -z "${BASELINE_BACKUP:-}" ] || baseline_failure
+  exit 1
 fi
 if fm_pr_poll_publish_prepared; then
   fm_lock_release "$PR_POLL_PUBLISH_LOCK" || { [ -z "${BASELINE_BACKUP:-}" ] || baseline_failure; exit 1; }

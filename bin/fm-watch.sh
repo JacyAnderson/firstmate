@@ -3935,13 +3935,13 @@ fi
 
 # Shared by both the first-notification and already-notified paths below so
 # the retirement sequence (bin/fm-pr-lib.sh) is stated once.
-retire_merged_pr_poll() {  # <id>
-  local id=$1
-  if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" merged; then
+retire_merged_pr_poll() {  # <id> [merged|closed]
+  local id=$1 result=${2:-merged}
+  if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" "$result"; then
     fm_pr_poll_retirement_recover_one "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
-      || triage_log "merged PR poll retirement remains recoverable for $id"
+      || triage_log "$result PR poll retirement remains recoverable for $id"
   else
-    triage_log "merged PR poll retirement deferred because its canonical snapshot changed for $id"
+    triage_log "$result PR poll retirement deferred because its canonical snapshot changed for $id"
   fi
 }
 
@@ -4263,6 +4263,32 @@ EOF
             triage_log "absorbed duplicate merged PR poll result for $id"
             continue
           fi
+          wake "$reason"
+        elif [ "$is_pr_poll" -eq 1 ] && [ "$out" = closed ]; then
+          # Closed without merging: no merge outcome exists to record. The
+          # durable wake and the closed marker land before retirement, both
+          # under the control lock, so a failed append keeps the poll armed.
+          if [ "$(fm_meta_get "$STATE/$id.meta" kind)" = secondmate ]; then
+            retire_merged_pr_poll "$id" closed
+            pr_poll_control_release || exit 1
+            touch "$STATE/.last-check"
+            triage_log "retired a closed-PR poll armed on secondmate $id without a wake"
+            continue
+          fi
+          if fm_pr_poll_degraded_already_notified "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" closed; then
+            retire_merged_pr_poll "$id" closed
+            pr_poll_control_release || exit 1
+            touch "$STATE/.last-check"
+            triage_log "absorbed duplicate closed PR poll result for $id"
+            continue
+          fi
+          fm_wake_append check "$c" "$reason" || exit 1
+          fm_pr_poll_degraded_mark_notified "$STATE" "$id" \
+            "$provider" "$host" "$path" "$number" closed || exit 1
+          retire_merged_pr_poll "$id" closed
+          pr_poll_control_release || exit 1
+          touch "$STATE/.last-check"
           wake "$reason"
         elif [ "$is_pr_poll" -eq 1 ] \
           && { [ "$out" = ontrain ] || [ "${out%% *}" = degraded ]; } \

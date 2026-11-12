@@ -5,6 +5,7 @@
 # on every error, so a failed lookup can never be read as a merge, a
 # degradation, or new review activity:
 #   merged            the PR, MR, or change is merged
+#   closed            the PR or MR was closed without merging
 #   degraded ...      a ready change degraded after its ready report (a failing
 #                     check on GitHub, a failing head pipeline on GitLab)
 #   pr-comments +N    N new review comments landed since the last poll
@@ -308,6 +309,10 @@ case "$provider" in
         printf '%s\n' merged
         exit 0
       fi
+      if [ "$result" = CLOSED ]; then
+        printf '%s\n' closed
+        exit 0
+      fi
       github_comments
       exit 0
     fi
@@ -327,6 +332,8 @@ case "$provider" in
     result=$(GH_HOST=$host gh pr view "$url" --json state,headRefOid,statusCheckRollup --jq '
       if .state == "MERGED" then
         "merged"
+      elif .state == "CLOSED" then
+        "closed"
       elif .state == "OPEN"
         and ([.statusCheckRollup[]?
                 | select((.conclusion // .state // "") as $r
@@ -349,12 +356,15 @@ case "$provider" in
       else
         ""
       end' 2>/dev/null) || exit $unknown
-    if [ "$result" != merged ] && github_comments; then
+    if [ "$result" != merged ] && [ "$result" != closed ] && github_comments; then
       exit 0
     fi
     case $result in
       merged)
         printf '%s\n' merged
+        ;;
+      closed)
+        printf '%s\n' closed
         ;;
       'degraded head='*)
         case $result in
@@ -406,6 +416,10 @@ case "$provider" in
         printf '%s\n' merged
         exit 0
       fi
+      if [ "$state" = closed ]; then
+        printf '%s\n' closed
+        exit 0
+      fi
       gitlab_comments "$(printf '%s\n' "$raw" | sed -n 's/^comments:[[:space:]]*//p' | head -1)"
       exit 0
     fi
@@ -422,7 +436,7 @@ case "$provider" in
     # Any other open merge request has its merge-train car read: a present car
     # emits "ontrain"; after a car HTTP 404, a readable train list without the
     # merge request triggers one bounded MR-state re-read. An opened or locked
-    # re-read emits a degraded train-drop line; a closed re-read stays silent,
+    # re-read emits a degraded train-drop line; a closed re-read emits "closed",
     # and a merged re-read emits "merged". If the re-read fails, the line
     # includes mr_state=unconfirmed so the confirmed drop is not hidden. The
     # watcher wakes only when it last saw the
@@ -516,6 +530,10 @@ case "$provider" in
         printf '%s\n' merged
         exit 0
       fi
+      if [ "$state" = closed ]; then
+        printf '%s\n' closed
+        exit 0
+      fi
       gitlab_comments "$(printf '%s\n' "$raw" | sed -n 's/^comments:[[:space:]]*//p' | head -1)"
       exit 0
     fi
@@ -528,6 +546,8 @@ case "$provider" in
       then
         if .state == "merged" then
           "merged"
+        elif .state == "closed" then
+          "closed"
         elif (.state == "opened" or .state == "locked")
              and (.head_pipeline | type) == "object"
              and (.head_pipeline.status | type) == "string"
@@ -544,7 +564,7 @@ case "$provider" in
       else
         error("invalid merge request record")
       end' 2>/dev/null) || exit $unknown
-    if [ "$result" != merged ] \
+    if [ "$result" != merged ] && [ "$result" != closed ] \
       && gitlab_comments "$(printf '%s' "$raw" | jq -r '.user_notes_count // empty' 2>/dev/null)"; then
       exit 0
     fi
@@ -597,7 +617,7 @@ case "$provider" in
           case $current_state in
             merged) printf '%s\n' merged; exit 0 ;;
             opened|locked) ;;
-            closed) exit 0 ;;
+            closed) printf '%s\n' closed; exit 0 ;;
             *) current_state=unknown ;;
           esac
           line="degraded train=dropped url=$url"
@@ -613,6 +633,9 @@ case "$provider" in
     case $result in
       merged)
         printf '%s\n' merged
+        ;;
+      closed)
+        printf '%s\n' closed
         ;;
       'degraded pipeline='*)
         case $result in
