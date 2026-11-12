@@ -75,8 +75,7 @@ Over 483 samples the idle composer read `empty`, a typed draft read `pending` id
 
 Every one of the 460 busy samples opened its status row with the braille spinner and elapsed cell (`⠼ 1h`), which keeps rendered busy readable.
 The working row above the composer showed `⎋ Working…` in only 16 of them; the rest carried the model's intent text, such as `⎋ Draining wakes in full`.
-That `⎋` row is not a busy signal, because a plain capture cannot tell it from the same text quoted in the transcript.
-A row that only carries a context cell such as `◫ 53.9%/1M` does not bound the composer either, because a wrapped draft can carry the same text.
+The omp busy regex does not match that `⎋` row, so the spinner cell carries those turns as their only rendered busy signal.
 One sample showed the slash-command popup over a typed `/c`, which read `pending`, and one sample caught the screen mid-submit with no composer drawn, which read `unknown`.
 
 A throwaway omp 18.18.8 under `.omp/fm-worker-overlay.yml`, in a private tmux server with its own `PI_CODING_AGENT_DIR` and no model, supplied the dialog screens.
