@@ -3625,6 +3625,10 @@ if [ "$BACKEND" = t3code ]; then
     echo "error: backend=t3code cannot apply config/launch-env-allowlist because T3 starts the agent with its provider instance's environment; remove that file or choose another backend" >&2
     exit 1
   fi
+  if [ -n "$EXCLUDE_TOOLS" ]; then
+    echo "error: backend=t3code cannot apply config/crew-exclude-tools because T3 starts the agent without Firstmate's tool flags; empty that file or choose another backend" >&2
+    exit 1
+  fi
   if [ -n "$WORKER_ACCOUNT" ]; then
     echo "error: backend=t3code cannot apply the $HARNESS worker account pin because T3's provider instance owns the account; select that instance in config/t3code-instances instead" >&2
     exit 1
