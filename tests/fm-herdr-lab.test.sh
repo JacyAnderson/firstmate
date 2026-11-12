@@ -196,8 +196,9 @@ test_captured_provision_returns_promptly() {
   elapsed=$(($(date +%s) - started))
   pid=$(cat "$FAKE_STATE/$name.pid" 2>/dev/null || true)
   expect_code 0 "$status" "captured provision failed: $output"
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null \
-    || fail "the fake server was not running when provision returned, so the pipe was never held"
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    fail "the fake server was not running when provision returned, so the pipe was never held"
+  fi
   kill "$pid" 2>/dev/null || true
   [ "$elapsed" -lt 10 ] || fail "captured provision held its output pipe open for ${elapsed}s"
   run_with_fake fm_herdr_lab_teardown "$name" >/dev/null 2>&1 || true
