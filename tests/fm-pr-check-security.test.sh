@@ -1542,21 +1542,55 @@ test_static_poll_contract() {
 }
 
 test_closed_poll_wakes_once_and_retires() {
-  local dir rc
+  local dir state url=https://github.com/o/r/pull/1 rc before
   dir=$(make_case closed-poll-retire)
-  write_poll_meta "$dir/home/state" task-a https://github.com/o/r/pull/1
-  fm_pr_poll_prepare "$dir/home/state" task-a github https://github.com/o/r/pull/1 github.com o/r 1 "$POLL" \
-    || fail "could not prepare authenticated watcher poll"
-  fm_pr_poll_publish_prepared || fail "could not publish authenticated watcher poll"
-  rm -f "$dir/home/state/.last-check"
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a "$url" 'kind=ship' 'mode=no-mistakes'
+  printf '%s\n' "done [at=2]: PR $url checks green" > "$state/task-a.status"
+  seed_canonical_poll "$dir" task-a "$url"
+  rm -f "$state/.last-check"
   set +e
   FM_TEST_GH_STATE=CLOSED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
   rc=$?
   set -e
   [ "$rc" -eq 0 ] || fail "watcher did not surface closed poll: $(cat "$dir/watch.err")"
   [ "$(grep -c '^check: .*: closed$' "$dir/watch.out")" -eq 1 ] || fail "watcher did not convert closed output into exactly one wake"
-  assert_poll_absent "$dir/home/state" task-a
-  pass "a closed unmerged PR wakes once and retires its poll"
+  [ "$(grep -c 'task-a.check.sh: closed$' "$state/.wake-queue")" -eq 1 ] \
+    || fail "closed result left no durable queue row"
+  assert_poll_absent "$state" task-a
+  fm_pr_poll_degraded_already_notified "$state" task-a github github.com o/r 1 closed \
+    || fail "closed retirement left no identity-bound marker"
+  fm_pr_poll_merge_already_notified "$state" task-a github github.com o/r 1 \
+    && fail "closed retirement recorded a merge"
+
+  FM_TEST_GH_STATE=CLOSED run_check_entry "$dir" scan > /dev/null 2> "$dir/scan.err" \
+    || fail "the scan failed: $(cat "$dir/scan.err")"
+  if fm_pr_poll_artifacts_valid "$state" task-a "$POLL"; then
+    fail "the scan re-armed the poll of a closed request"
+  fi
+
+  FM_TEST_GH_STATE=OPEN run_check_entry "$dir" task-a "$url" > /dev/null 2> "$dir/arm.err" \
+    || fail "explicit arming of a reopened request failed: $(cat "$dir/arm.err")"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "explicit arming did not re-arm the poll"
+  fm_pr_poll_degraded_already_notified "$state" task-a github github.com o/r 1 closed \
+    && fail "explicit arming kept the closed marker"
+
+  dir=$(make_case closed-poll-queue-failure)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a "$url"
+  seed_canonical_poll "$dir" task-a "$url"
+  mkdir "$state/.wake-queue.seq"
+  before=$(poll_artifact_snapshot "$state" task-a)
+  set +e
+  FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GH_STATE=CLOSED \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "watcher retired a closed poll despite queue publication failure"
+  [ -s "$dir/gh.log" ] || fail "closed queue failure fixture did not reach the poll"
+  [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "closed queue failure changed poll artifacts"
+  [ ! -e "$state/task-a.pr-poll-degraded" ] || fail "closed queue failure published a marker"
+  pass "a closed unmerged PR wakes once durably, retires, stays retired under the scan, and re-arms explicitly"
 }
 
 test_comment_watch_github() {

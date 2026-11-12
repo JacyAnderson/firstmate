@@ -1627,7 +1627,7 @@ fm_pr_poll_degraded_identity_valid() {  # <identity>
       esac
       [ "${#value}" -le 18 ] || return 1
       ;;
-    train=on|train=dropped) ;;
+    train=on|train=dropped|closed) ;;
     *) return 1 ;;
   esac
 }
@@ -1697,6 +1697,18 @@ fm_pr_poll_degraded_mark_notified() {  # <state> <id> <provider> <host> <path> <
     rm -f -- "$tmp"
     return 1
   fi
+}
+
+# A closed-unmerged retirement leaves this marker with identity "closed" so the
+# registration scan (bin/fm-pr-check.sh) does not re-arm the abandoned request.
+# An explicit arming clears it; any other identity is left alone.
+fm_pr_poll_closed_marker_clear() {  # <state> <id>
+  local state=$1 id=$2 marker
+  fm_pr_task_id_valid "$id" || return 1
+  marker="$state/$id.pr-poll-degraded"
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 0
+  [ "$(sed -n 6p "$marker")" = closed ] || return 0
+  rm -f -- "$marker"
 }
 
 # Removed at teardown alongside the other per-task PR-poll artifacts

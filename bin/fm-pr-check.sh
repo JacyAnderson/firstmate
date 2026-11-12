@@ -104,6 +104,7 @@ pr_check_rotate() {  # <last-id>: start the lines on stdin just after the line f
 pr_check_pr_retired() {  # <id> <recorded-url>
   [ -n "$2" ] && fm_pr_url_parse "$2" || return 1
   fm_pr_poll_merge_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" && return 0
+  fm_pr_poll_degraded_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" closed && return 0
   fm_pr_poll_retirement_parse "$STATE/$1.pr-poll-retirement" && [ "$FM_PR_RETIRE_URL" = "$2" ]
 }
 
@@ -502,6 +503,7 @@ if [ -n "${BASELINE_BACKUP:-}" ]; then
   fi
 fi
 if fm_pr_poll_publish_prepared; then
+  [ "${FM_PR_CHECK_SCAN:-0}" = 1 ] || fm_pr_poll_closed_marker_clear "$STATE" "$ID" || true
   fm_lock_release "$PR_POLL_PUBLISH_LOCK" || { [ -z "${BASELINE_BACKUP:-}" ] || baseline_failure; exit 1; }
   PR_POLL_PUBLISH_LOCK_HELD=0
 else

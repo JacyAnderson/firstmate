@@ -4234,15 +4234,30 @@ EOF
           fi
           wake "$reason"
         elif [ "$is_pr_poll" -eq 1 ] && [ "$out" = closed ]; then
-          # Closed without merging: no merge outcome exists to record, so the
-          # poll is retired and the abandonment is reported once.
-          retire_merged_pr_poll "$id" closed
-          pr_poll_control_release || exit 1
-          touch "$STATE/.last-check"
+          # Closed without merging: no merge outcome exists to record. The
+          # durable wake and the closed marker land before retirement, both
+          # under the control lock, so a failed append keeps the poll armed.
           if [ "$(fm_meta_get "$STATE/$id.meta" kind)" = secondmate ]; then
+            retire_merged_pr_poll "$id" closed
+            pr_poll_control_release || exit 1
+            touch "$STATE/.last-check"
             triage_log "retired a closed-PR poll armed on secondmate $id without a wake"
             continue
           fi
+          if fm_pr_poll_degraded_already_notified "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" closed; then
+            retire_merged_pr_poll "$id" closed
+            pr_poll_control_release || exit 1
+            touch "$STATE/.last-check"
+            triage_log "absorbed duplicate closed PR poll result for $id"
+            continue
+          fi
+          fm_wake_append check "$c" "$reason" || exit 1
+          fm_pr_poll_degraded_mark_notified "$STATE" "$id" \
+            "$provider" "$host" "$path" "$number" closed || exit 1
+          retire_merged_pr_poll "$id" closed
+          pr_poll_control_release || exit 1
+          touch "$STATE/.last-check"
           wake "$reason"
         elif [ "$is_pr_poll" -eq 1 ] \
           && { [ "$out" = ontrain ] || [ "${out%% *}" = degraded ]; } \
