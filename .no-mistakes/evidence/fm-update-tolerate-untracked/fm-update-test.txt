@@ -1,0 +1,4 @@
+ok - T4 dirty secondmate skipped, local edit preserved
+ok - T4b untracked dirt is tolerated unless it collides with the incoming range
+ok - T5c a redundant-divergence collision is refused with the path named
+# all fm-update tests passed
