@@ -309,7 +309,8 @@
 #   directory with --cwd, and passes the tracked worker posture overlay
 #   .omp/fm-worker-overlay.yml through --config. That overlay pins composer
 #   shape, plan mode off, prewalk off, and the non-interactive usage-reserve
-#   policy for the one session only (--auto-approve alone owns approval); the
+#   policy, and turns on skills.enableClaudeUser, for the one session only
+#   (--auto-approve alone owns approval); the
 #   captain's own ~/.omp/agent/config.yml (model roles, providers, theme) is
 #   never written.
 #   A model written as <provider>/<id> is validated against `omp models --json`
