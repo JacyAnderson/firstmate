@@ -84,7 +84,6 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
-  mission-control/   captain status-board initiative cards and registry; docs/mission-control.md owns the schemas
   <id>/status.log <id>/status.<N>.log <id>/children/<child>/...  optional teardown archives; see docs/architecture.md "Task status archives"
   pipeline-spend.jsonl  optional per-task no-mistakes pipeline spend, written only when config/pipeline-spend is present; bin/fm-pipeline-spend.sh owns the schema
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
@@ -136,7 +135,6 @@ state/               runtime records and signals; gitignored
   pr-health.check.sh  generated owned-PR health poll shim and its .check-trust binding; present only after bin/fm-pr-health.sh arm, which config/pr-health-monitor gates (docs/configuration.md "PR health monitor")
   pr-health.json     the health monitor's fm-pr-health.v1 record: per-PR fingerprints of the conditions already reported, the task branch-to-PR lookup cache, and the GitHub notifications cursor, replaced by rename under .pr-health.lock; bin/fm-pr-health.sh owns the format
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
-  mission-control/   board server runtime records and the file-queued captain inbox drained on mission-control check wakes (docs/mission-control.md; bin/fm-mission-control.sh)
   t3code-sends/      T3 send request-id retention and accepted delivery outcomes; docs/t3code-backend.md "Current lifecycle and safety" owns the window and files
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (`process-event-sources` skill)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line

@@ -846,8 +846,6 @@ tests/fm-live-lab.test.sh 79639
 tests/fm-mail-check.test.sh 7524
 tests/fm-mail.test.sh 9684
 tests/fm-merge-local.test.sh 30000
-tests/fm-mission-control-seed.test.sh 12000
-tests/fm-mission-control.test.sh 6000
 tests/fm-muse-harness.test.sh 46548
 tests/fm-muse-signals-live-e2e.test.sh 52
 tests/fm-nm-test-contract.test.sh 853
