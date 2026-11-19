@@ -4,10 +4,10 @@
 # analogue of the Pi adapter's `--tui-mode regular` pin: a per-launch overlay,
 # never a write to the captain's own ~/.omp/agent/config.yml, which stays
 # exactly as the captain set it (model roles, theme, providers, compaction).
-# Each key below pins one setting whose captain-facing value would park an
-# unattended worker on an interactive prompt, change its pinned model under it,
-# or make its composer unreadable to bin/fm-composer-lib.sh. Verified against
-# omp 18.1.11's own settings schema (`omp config list`).
+# Each key but `skills` pins a setting whose captain-facing value would park an
+# unattended worker on a prompt, change its model, or make its composer
+# unreadable to bin/fm-composer-lib.sh; `skills` adds a capability. Verified
+# against omp 18.22.2's settings schema (`omp config list`).
 composer:
   # Renders a bare `❯` (U+276F) row, a glyph the shared composer classifier
   # already reads; the shipped default `band` and six other shapes are not in
@@ -25,3 +25,6 @@ retry:
   # `confirm` pops a dialog when a usage window runs low; `auto` lets omp fall
   # through the captain's own fallback chain without a keystroke.
   usageReservePolicy: auto
+skills:
+  # Makes ~/.claude/skills (home of /deep-review-and-fix) visible to workers.
+  enableClaudeUser: true
