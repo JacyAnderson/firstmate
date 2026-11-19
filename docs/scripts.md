@@ -20,10 +20,6 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-bearings-snapshot.sh` | Project the bounded remote-ledger fleet snapshot to compact TOON; `--include-prs` adds live GitHub enrichment |
 | `fm-bearings-board.sh`   | Build and arm the stable interactive `/bearings lavish` fleet board                  |
-| `fm-mission-control.sh`  | Start, stop, and report the Mission Control board server and install its watcher inbox check |
-| `fm-mission-control-server.mjs` | Localhost-only board server rendering initiative cards and queueing captain input as inbox files (docs/mission-control.md) |
-| `fm-mission-control-poll.sh` | List-names-only inbox poll naming the initiatives with pending captain input     |
-| `fm-mission-control-seed.sh` | Seed absent initiative stubs and registry entries from the open tasks-axi backlog; `--fix-titles` repairs mangled seeded titles |
 | `fm-lavish-url.sh`       | Capture a website into an armed Lavish review and route its feedback to a project backlog |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
 | `fm-update.sh`           | Guarded self-update of firstmate and local or remote secondmate homes, reconciling redundant divergence and classifying every live mate left on the target commit for restart or fallback nudge |

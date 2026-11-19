@@ -133,7 +133,7 @@ hotspot_note() {
     docs/scripts.md) notes="$notes; keep the fork's rows (fm-text-check.sh, fm-upstream-sync.sh, review-comment poll)" ;;
     .agents/skills/updatefirstmate/SKILL.md) notes="$notes; fork's upstream sync section" ;;
     .agents/skills/operational-home-layout/*|.agents/skills/ship-landing/*|.agents/skills/agent-skill-trigger-index/*)
-      notes="$notes; fork entries for Mission Control and pr-comments" ;;
+      notes="$notes; fork entries for pr-comments" ;;
   esac
   case "$1" in
     AGENTS.md) notes="$notes; port fork lines from sections upstream moved into skills into the owning skill" ;;
