@@ -123,7 +123,8 @@ hotspot_note() {
     bin/fm-test-run.sh) notes="$notes; test family lists: keep both sides' entries; timing hints live in tests/fm-test-ci-timings.tsv" ;;
     tests/fm-test-ci-timings.tsv|docs/fm-test-portable-shards.md)
       notes="$notes; keep the fork's fm-text-check and fm-upstream-sync hints and their provisional-hint sentence" ;;
-    bin/fm-watch.sh) notes="$notes; surface_nonterminal_stale guards the paused recheck age against an empty stat_mtime, paused_recheck_silent refuses silence while a blocking dialog shows, and handle_paused_stale keeps its dialog argument" ;;
+    bin/fm-watch.sh) notes="$notes; surface_nonterminal_stale guards the paused recheck age against an empty stat_mtime, paused_recheck_silent refuses silence while a blocking dialog shows, handle_paused_stale keeps its dialog argument, and parked_lane_watches_pr leaves a parked lane's pr-comments to fm-park.sh tick" ;;
+    bin/fm-park.sh) notes="$notes; closed_once consults and the tick writes the poll's PR-bound closed marker" ;;
     tests/fm-herdr-lab.test.sh) notes="$notes; HOME is a real short temp directory, not /home/test, and the captured-pipe test checks provision status" ;;
     bin/fm-afk-start.sh|bin/fm-afk-launch.sh|tests/fm-afk-launch.test.sh)
       notes="$notes; fresh away entry also clears, and launch backs up, the watcher's .stale-v3.* hand-off markers; the session-scope test checks housekeeping's status" ;;
