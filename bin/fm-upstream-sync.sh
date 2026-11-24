@@ -142,6 +142,7 @@ hotspot_note() {
   esac
   case "$1" in
     bin/fm-spawn.sh) notes="$notes; backend=t3code refuses a non-empty config/crew-exclude-tools" ;;
+    bin/fm-pr-check.sh) notes="$notes; only a merged retirement blocks scan replacement (pr_check_pr_retired ... merged)" ;;
   esac
   printf '%s' "${notes#; }"
 }
