@@ -1201,6 +1201,94 @@ test_land_waits_for_an_action_under_way() {
   pass "a merge-time cleanup waits for a relaunch of the same lane that is under way"
 }
 
+# --- the real watcher over a parked lane -----------------------------------
+
+# Arms the lane's canonical merge and review-comment poll (bin/fm-pr-poll.sh)
+# and fronts the world's gh with the reads that poll makes: the PR state from
+# $world/poll.state (OPEN by default) and one new foreign issue comment per
+# read while $world/poll.comments exists. Initializes the comment watermark.
+arm_real_poll() {  # <world>
+  local world=$1
+  rm -f "$world/state/lane.check.sh"
+  bash -c '. "$1/bin/fm-pr-lib.sh"
+    fm_pr_poll_prepare "$2" lane github "$3" github.com example/repo 7 "$1/bin/fm-pr-poll.sh" && fm_pr_poll_publish_prepared' \
+    _ "$ROOT" "$world/state" "$GH_URL" || fail "setup: could not arm the canonical poll"
+  mv "$world/fakebin/gh" "$world/fakebin/gh.park"
+  cat > "$world/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case " \$* " in
+  *" pr view "*" --json state "*) cat "$world/poll.state" 2>/dev/null || echo OPEN; exit 0 ;;
+  *" api user "*) echo fm-bot; exit 0 ;;
+  *" --jq .updated_at "*) echo 2026-01-01T00:00:00Z; exit 0 ;;
+  *"/pulls/7/comments?since="*) exit 0 ;;
+  *"/issues/7/comments?since="*)
+    [ -e "$world/poll.comments" ] || exit 0
+    n=\$(( \$(cat "$world/poll.comments.n" 2>/dev/null || echo 0) + 1 ))
+    printf '%s\n' "\$n" > "$world/poll.comments.n"
+    printf '2026-02-%02dT00:00:00Z\treviewer\n' "\$n"
+    exit 0
+    ;;
+esac
+exec "$world/fakebin/gh.park" "\$@"
+SH
+  chmod +x "$world/fakebin/gh"
+  PATH="$world/fakebin:$PATH" bash "$world/state/lane.check.sh" >/dev/null 2>&1 || true
+  [ -f "$world/state/lane.pr-comments" ] || fail "setup: the comment watermark was not initialized"
+}
+
+# One watcher run with a check sweep due, bounded to 10 seconds; returns when it
+# wakes. The supervisor's handling is a drain and an acknowledgement: each drained row is
+# appended to $world/drained.log.
+run_watcher_once() {  # <world>
+  local world=$1 err sequence generation
+  rm -f "$world/state/.last-check"
+  ( perl -e 'alarm shift; exec @ARGV' 10 env -u FM_STATE_OVERRIDE FM_HOME="$world" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CONFIG_OVERRIDE="$world/config" \
+    FM_PARK_CONTROL_BIN="$world/fakebin/fm-control.sh" \
+    FM_PARK_TEARDOWN_BIN="$world/fakebin/fm-teardown.sh" \
+    FM_PARK_CREW_STATE_BIN="$world/fakebin/fm-crew-state.sh" \
+    FM_CHECK_INTERVAL=3600 FM_POLL=0.05 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 \
+    PATH="$world/fakebin:$PATH" "$ROOT/bin/fm-watch.sh" > "$world/watch.out" 2> "$world/watch.err" ) 2>/dev/null || true
+  err="$world/drain.err"
+  FM_STATE_OVERRIDE="$world/state" "$ROOT/bin/fm-wake-drain.sh" >> "$world/drained.log" 2> "$err" || return 0
+  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+  [ -n "$sequence" ] && [ -n "$generation" ] || return 0
+  FM_STATE_OVERRIDE="$world/state" "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" \
+    --recovery-generation "$generation" >/dev/null 2>&1 || fail "could not acknowledge the watcher's wakes"
+}
+
+wait_relaunch() {  # <world>
+  for _ in $(seq 1 200); do
+    grep -q '^lane relaunch --note-file ' "$1/control.log" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# The poll and the park tick both see a review comment on a parked lane. The
+# tick owns it: the sweep that sees the comment relaunches the worker, and the
+# comment stream never reaches the supervisor as a separate wake.
+test_watcher_relaunches_a_parked_lane_in_the_sweep_that_sees_a_comment() {
+  local w later run
+  later=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+  w=$(make_world watch-comment "$GH_URL"); gh_fixture "$w/gh.1.json"
+  arm_real_poll "$w"
+  park_world "$w"
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"reviewer\",\"__typename\":\"User\"},\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
+  : > "$w/poll.comments"
+  for run in 1 2 3; do
+    run_watcher_once "$w"
+    grep -q 'pr-comments' "$w/drained.log" 2>/dev/null \
+      && fail "run $run: a parked lane's comment woke the supervisor: $(cat "$w/watch.out")"
+    wait_relaunch "$w" && break
+  done
+  [ "$run" = 1 ] || fail "the relaunch waited for watcher run $run: $(cat "$w/control.log" 2>/dev/null)"
+  [ "$(grep -c '^lane relaunch --note-file ' "$w/control.log")" = 1 ] || fail "relaunched more than once: $(cat "$w/control.log")"
+  [ "$(cat "$w/poll.comments.n")" -ge 1 ] || fail "the poll never reported the comment"
+  pass "the watcher sweep that sees a parked lane's review comment relaunches it without a separate comment wake"
+}
+
 fm_test_run \
   test_github_gate_clean_and_each_unclean_condition \
   test_github_gate_refuses_until_every_required_check_reports \
@@ -1235,4 +1323,5 @@ fm_test_run \
   test_killed_cleanup_is_retried_and_reported_once \
   test_stale_cleanup_request_for_another_pr_is_dropped \
   test_reports_survive_until_their_wake_is_recorded \
-  test_land_waits_for_an_action_under_way
+  test_land_waits_for_an_action_under_way \
+  test_watcher_relaunches_a_parked_lane_in_the_sweep_that_sees_a_comment

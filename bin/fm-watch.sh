@@ -4014,6 +4014,14 @@ retire_merged_pr_poll() {  # <id> [merged|closed]
   fi
 }
 
+# A lane parked on review whose park record names this PR, and whose tick still
+# relaunches it (no recorded relaunch failure).
+parked_lane_watches_pr() {  # <id> <url>
+  local rec="$STATE/$1.review-park"
+  [ -f "$rec" ] && [ ! -L "$rec" ] || return 1
+  [ "$(fm_meta_get "$rec" pr)" = "$2" ] && [ -z "$(fm_meta_get "$rec" resume_error)" ]
+}
+
 # A poll armed before a state volume remount can fail capture only because its
 # registration names the old device number; bin/fm-pr-lib.sh
 # fm_pr_poll_registration_rerecord_device owns the proof and the rewrite.
@@ -4371,6 +4379,12 @@ EOF
           pr_poll_control_release || exit 1
           touch "$STATE/.last-check"
           wake "$reason"
+        elif [ "$is_pr_poll" -eq 1 ] && [ "${out%% *}" = pr-comments ] && parked_lane_watches_pr "$id" "$url"; then
+          # bin/fm-park.sh's tick below relaunches a parked lane on review
+          # activity; waking here would exit the sweep before it runs.
+          pr_poll_control_release || exit 1
+          triage_log "left new review comments on parked lane $id to its park tick"
+          continue
         elif [ "$is_pr_poll" -eq 1 ] \
           && { [ "$out" = ontrain ] || [ "${out%% *}" = degraded ]; } \
           && [ "$PR_DEGRADED_WATCH_ENABLED" != 1 ]; then
