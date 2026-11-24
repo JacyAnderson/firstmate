@@ -1271,25 +1271,28 @@ wait_relaunch() {  # <world>
 
 # The poll and the park tick both see a review comment on a parked lane. The
 # tick owns it: the sweep that sees the comment relaunches the worker, and the
-# comment stream never reaches the supervisor as a separate wake.
+# comment never reaches the supervisor as a separate wake. Three rounds of
+# park, comment, and one watcher run each show a comment never costs a parked
+# lane another check interval.
 test_watcher_relaunches_a_parked_lane_in_the_sweep_that_sees_a_comment() {
-  local w later run
+  local w later round
   later=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
   w=$(make_world watch-comment "$GH_URL"); gh_fixture "$w/gh.1.json"
   arm_real_poll "$w"
-  park_world "$w"
-  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"reviewer\",\"__typename\":\"User\"},\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
   : > "$w/poll.comments"
-  for run in 1 2 3; do
+  for round in 1 2 3; do
+    gh_fixture "$w/gh.1.json"
+    park_world "$w"
+    [ -e "$w/state/lane.review-park" ] || fail "round $round: the lane did not park"
+    gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"reviewer\",\"__typename\":\"User\"},\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
     run_watcher_once "$w"
     grep -q 'pr-comments' "$w/drained.log" 2>/dev/null \
-      && fail "run $run: a parked lane's comment woke the supervisor: $(cat "$w/watch.out")"
-    wait_relaunch "$w" && break
+      && fail "round $round: a parked lane's comment woke the supervisor: $(cat "$w/watch.out")"
+    wait_relaunch "$w" || fail "round $round: the sweep that saw the comment did not relaunch the lane"
+    [ "$(grep -c '^lane relaunch --note-file ' "$w/control.log")" = 1 ] || fail "round $round: relaunch count: $(cat "$w/control.log")"
+    [ "$(cat "$w/poll.comments.n")" -ge "$round" ] || fail "round $round: the poll did not report the comment"
   done
-  [ "$run" = 1 ] || fail "the relaunch waited for watcher run $run: $(cat "$w/control.log" 2>/dev/null)"
-  [ "$(grep -c '^lane relaunch --note-file ' "$w/control.log")" = 1 ] || fail "relaunched more than once: $(cat "$w/control.log")"
-  [ "$(cat "$w/poll.comments.n")" -ge 1 ] || fail "the poll never reported the comment"
-  pass "the watcher sweep that sees a parked lane's review comment relaunches it without a separate comment wake"
+  pass "each sweep that sees a parked lane's review comment relaunches it without a separate comment wake"
 }
 
 # A parked PR closed without merging is one decision, whichever of the merge
