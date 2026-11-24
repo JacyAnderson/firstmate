@@ -993,6 +993,7 @@ fm_pr_poll_retirement_parse() {
   FM_PR_RETIRE_CHECK_IDENTITY=$check_identity
   FM_PR_RETIRE_REG_HASH=$reg_hash
   FM_PR_RETIRE_REG_IDENTITY=$reg_identity
+  # shellcheck disable=SC2034 # read by bin/fm-crew-state.sh and bin/fm-pr-check.sh
   FM_PR_RETIRE_RESULT=$result
 }
 
