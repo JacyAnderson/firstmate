@@ -52,7 +52,8 @@
 # secondmate or scout and has no pr= line, has the reported pr= but no valid
 # published poll, or has a pr= that its status log named and the reported PR now
 # replaces; a pr= the log never named is the supervisor's own choice and stays,
-# and a merged or retired pr= is never replaced. Each candidate is recorded
+# and a merged pr= is never replaced. A pr= retired as closed unmerged is not
+# re-armed, but a newer ready PR replaces it. Each candidate is recorded
 # through the ordinary path above, so every refusal still applies. A refusal
 # queues a check wake and prints one line naming the task, the URL, and the
 # reason, once per task and URL (state/<task>.pr-register-refused), and the scan
@@ -108,11 +109,16 @@ pr_check_rotate() {  # <last-id>: start the lines on stdin just after the line f
   awk -v last="$1" '{ a[NR] = $0; split($0, f, " "); if (f[1] == last) s = NR } END { for (i = 0; i < NR; i++) print a[(i + s) % NR + 1] }'
 }
 
-pr_check_pr_retired() {  # <id> <recorded-url>
+# With "merged", a closed-unmerged retirement does not count: it ends that PR's
+# watch but not the lane's delivery, so a newer ready PR may still replace it.
+pr_check_pr_retired() {  # <id> <recorded-url> [merged]
   [ -n "$2" ] && fm_pr_url_parse "$2" || return 1
   fm_pr_poll_merge_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" && return 0
-  fm_pr_poll_degraded_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" closed && return 0
-  fm_pr_poll_retirement_parse "$STATE/$1.pr-poll-retirement" && [ "$FM_PR_RETIRE_URL" = "$2" ]
+  if [ "${3:-}" != merged ]; then
+    fm_pr_poll_degraded_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" closed && return 0
+  fi
+  fm_pr_poll_retirement_parse "$STATE/$1.pr-poll-retirement" && [ "$FM_PR_RETIRE_URL" = "$2" ] \
+    && { [ "${3:-}" != merged ] || [ "$FM_PR_RETIRE_RESULT" = merged ]; }
 }
 
 pr_check_scan() {
@@ -132,7 +138,8 @@ pr_check_scan() {
     case "$kind" in secondmate|scout) continue ;; esac
     url=$(pr_check_reported_url "$STATE/$id.status") || continue
     recorded=$(grep '^pr=' "$meta" | tail -1 | cut -d= -f2- || true)
-    pr_check_pr_retired "$id" "$recorded" && continue
+    pr_check_pr_retired "$id" "$recorded" merged && continue
+    [ "$recorded" != "$url" ] || ! pr_check_pr_retired "$id" "$recorded" || continue
     replaces=
     if [ "$recorded" = "$url" ]; then
       ! fm_pr_poll_artifacts_valid "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" || continue
@@ -460,7 +467,7 @@ if [ "${FM_PR_CHECK_SCAN:-}" = 1 ]; then
     MERGE_NOTICE_LOCK="$STATE/$ID.pr-poll-merge-notified.lock"
     fm_lock_acquire_wait "$MERGE_NOTICE_LOCK"
     MERGE_NOTICE_LOCK_HELD=1
-    pr_check_pr_retired "$ID" "$RECORDED_PR" && exit 0
+    pr_check_pr_retired "$ID" "$RECORDED_PR" merged && exit 0
     if [ "$RECORDED_PR" = "${FM_PR_CHECK_SCAN_REPLACES:-}" ]; then
       reported=$(pr_check_reported_url "$STATE/$ID.status") || exit 0
       [ "$reported" = "$URL" ] || exit 0

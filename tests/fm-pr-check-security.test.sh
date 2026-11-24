@@ -1287,6 +1287,30 @@ test_scan_does_not_replace_a_merged_pr() {
   pass "the scan does not replace a PR whose merge was already reported"
 }
 
+# A closed-unmerged retirement ends only that PR's watch. The lane's next ready
+# PR still takes over pr=, while the closed PR is not re-armed.
+test_scan_replaces_a_closed_unmerged_pr() {
+  local dir state
+  dir=$(make_case scan-closed-replaced)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/7 'kind=ship' 'mode=no-mistakes'
+  printf '%s\n' 'done [at=2]: PR https://github.com/o/r/pull/7 checks green' > "$state/task-a.status"
+  fm_pr_poll_degraded_mark_notified "$state" task-a github github.com o/r 7 closed \
+    || fail "could not write the closed marker"
+
+  run_check_entry "$dir" scan > /dev/null 2> "$dir/stderr" || fail "the scan failed: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/7' "$state/task-a.meta" || fail "the scan dropped the closed PR's record"
+  [ ! -e "$state/task-a.check.sh" ] || fail "the scan re-armed the closed PR"
+
+  printf '%s\n' 'done [at=4]: PR https://github.com/o/r/pull/8 checks green' >> "$state/task-a.status"
+  run_check_entry "$dir" scan > /dev/null 2> "$dir/stderr" || fail "the replacement scan failed: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/8' "$state/task-a.meta" \
+    || fail "a closed PR's retirement blocked its replacement: $(grep '^pr=' "$state/task-a.meta")"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "the replacement left no valid poll"
+  [ "$FM_PR_DATA_URL" = 'https://github.com/o/r/pull/8' ] || fail "the poll still watches $FM_PR_DATA_URL"
+  pass "a closed unmerged PR is not re-armed, and its replacement takes over pr="
+}
+
 # A merge record holds the task's merge-notification lock while it writes the
 # merge notice, and the scan holds that same lock from its recheck through the
 # pr= write, so a replacement can never interleave with the record of the PR it
@@ -6058,6 +6082,7 @@ test_scan_replaces_a_recorded_pr_named_by_an_older_line
 test_scan_failed_replacement_restores_previous_watch
 test_scan_keeps_a_recorded_pr_the_log_never_named
 test_scan_does_not_replace_a_merged_pr
+test_scan_replaces_a_closed_unmerged_pr
 test_scan_does_not_replace_a_pr_whose_merge_is_being_recorded
 test_scan_keeps_the_watch_when_replacement_status_changes_during_reads
 test_scan_replacement_keeps_the_watch_it_cannot_take_over
