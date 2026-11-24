@@ -106,11 +106,17 @@
 #     collected with this tick's close lines;
 #   - each parked lane gets one forge read; a trigger relaunches it, a merge is
 #     left to the merge poll, and a close without merge is reported once;
+#     bin/fm-watch.sh leaves a parked lane's new review comments to this read
+#     instead of waking for them, so the sweep that sees one relaunches the lane;
 #   - with config/auto-land or config/park-on-review, each other idle ship lane
 #     with pr= and an armed merge poll gets one forge read:
 #     a close without merge is reported once (marker
 #     state/.review-park-closed-<id>), and with config/park-on-review a clean
 #     gate parks it.
+# A close is also skipped when the merge poll already reported that PR's
+# closure, and a reported close writes the same PR-bound closed marker the poll
+# writes (fm_pr_poll_degraded_mark_notified in bin/fm-pr-lib.sh), so one closure
+# is one notice whichever path sees it first.
 # Relaunch triggers on a parked lane: the head moved, checks failing, changes
 # requested, a merge conflict, any unresolved review thread, or any new
 # comment (inline review-thread replies included), review or note created or
@@ -767,10 +773,23 @@ cmd_run() {
 
 # --- tick ------------------------------------------------------------------
 
-# Prints a close once; the tick writes the marker after recording the wake.
+# Prints a close once; the tick writes the markers after recording the wake.
+# The PR-bound closed marker is the receipt bin/fm-watch.sh's closed-PR poll
+# writes too, so whichever path sees a closure first delivers it.
 closed_once() {  # <id> <pr>
   [ ! -e "$STATE/.review-park-closed-$1" ] || return 0
+  ! closed_receipt_exists "$1" "$2" || return 0
   printf 'closed %s: PR %s was closed without merging; the lane needs a decision\n' "$1" "$2"
+}
+
+closed_receipt_exists() {  # <id> <pr>
+  fm_pr_url_parse "$2" || return 1
+  fm_pr_poll_degraded_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" closed
+}
+
+closed_receipt_write() {  # <id> <pr>
+  fm_pr_url_parse "$2" || return 0
+  fm_pr_poll_degraded_mark_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" closed || true
 }
 
 watch_parked() {  # <id>
@@ -906,8 +925,16 @@ cmd_tick() {
   lines=$(printf '%s' "$lines" | grep -v '^$') || return 0
   fm_wake_append check park-on-review "check: park-on-review: $(printf '%s\n' "$lines" | paste -sd ';' - | sed 's/;/; /g')" || return 0
   rm -f -- ${reports[@]+"${reports[@]}"}
+  local closed_id closed_pr
   while IFS= read -r line; do
-    case "$line" in "closed "*:*) line=${line#closed }; : > "$STATE/.review-park-closed-${line%%:*}" ;; esac
+    case "$line" in
+      "closed "*": PR "*" was closed without merging;"*)
+        closed_id=${line#closed }; closed_id=${closed_id%%:*}
+        closed_pr=${line#*: PR }; closed_pr=${closed_pr%% was closed without merging;*}
+        : > "$STATE/.review-park-closed-$closed_id"
+        closed_receipt_write "$closed_id" "$closed_pr"
+        ;;
+    esac
   done <<< "$lines"
   printf '%s\n' "$lines"
 }

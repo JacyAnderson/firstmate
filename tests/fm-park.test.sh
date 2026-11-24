@@ -1289,6 +1289,29 @@ test_watcher_relaunches_a_parked_lane_in_the_sweep_that_sees_a_comment() {
   pass "the watcher sweep that sees a parked lane's review comment relaunches it without a separate comment wake"
 }
 
+# A parked PR closed without merging is one decision, whichever of the merge
+# poll and the park tick sees it first.
+test_parked_closure_is_one_notice_across_poll_and_tick() {
+  local w first
+  for first in poll tick; do
+    w=$(make_world "watch-close-$first" "$GH_URL"); gh_fixture "$w/gh.1.json"
+    arm_real_poll "$w"
+    park_world "$w"
+    gh_fixture "$w/gh.1.json" state=CLOSED
+    if [ "$first" = poll ]; then
+      echo CLOSED > "$w/poll.state"
+    fi
+    run_watcher_once "$w"
+    echo CLOSED > "$w/poll.state"
+    run_watcher_once "$w"
+    run_watcher_once "$w"
+    [ "$(grep -cE ': closed$|was closed without merging' "$w/drained.log" 2>/dev/null || true)" = 1 ] \
+      || fail "$first first: closure notices: $(grep -E ': closed$|was closed without merging' "$w/drained.log" 2>/dev/null)"
+    [ ! -e "$w/control.log" ] || fail "$first first: a lifecycle call was made: $(cat "$w/control.log")"
+  done
+  pass "a parked PR's closure is one durable notice whether the merge poll or the park tick sees it first"
+}
+
 fm_test_run \
   test_github_gate_clean_and_each_unclean_condition \
   test_github_gate_refuses_until_every_required_check_reports \
@@ -1324,4 +1347,5 @@ fm_test_run \
   test_stale_cleanup_request_for_another_pr_is_dropped \
   test_reports_survive_until_their_wake_is_recorded \
   test_land_waits_for_an_action_under_way \
-  test_watcher_relaunches_a_parked_lane_in_the_sweep_that_sees_a_comment
+  test_watcher_relaunches_a_parked_lane_in_the_sweep_that_sees_a_comment \
+  test_parked_closure_is_one_notice_across_poll_and_tick
