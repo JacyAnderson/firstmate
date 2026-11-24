@@ -120,12 +120,15 @@ hotspot_note() {
       notes="$notes; a record without branch= uses the bare <id> branch when it exists, else fm/<id>" ;;
     bin/fm-pr-check.sh|bin/fm-pr-poll.sh|bin/fm-teardown.sh|tests/fm-pr-check-security.test.sh)
       notes="$notes; pr-comments review-comment wakes (GitHub and GitLab only)" ;;
-    bin/fm-test-run.sh) notes="$notes; test family lists: keep both sides' entries" ;;
-    bin/fm-watch.sh) notes="$notes; surface_nonterminal_stale guards the paused recheck age against an empty stat_mtime, and paused_recheck_silent refuses silence while a blocking dialog shows" ;;
+    bin/fm-test-run.sh) notes="$notes; test family lists: keep both sides' entries; timing hints live in tests/fm-test-ci-timings.tsv" ;;
+    tests/fm-test-ci-timings.tsv|docs/fm-test-portable-shards.md)
+      notes="$notes; keep the fork's fm-text-check and fm-upstream-sync hints and their provisional-hint sentence" ;;
+    bin/fm-watch.sh) notes="$notes; surface_nonterminal_stale guards the paused recheck age against an empty stat_mtime, paused_recheck_silent refuses silence while a blocking dialog shows, handle_paused_stale keeps its dialog argument, and parked_lane_watches_pr leaves a parked lane's pr-comments to fm-park.sh tick" ;;
+    bin/fm-park.sh) notes="$notes; closed_once consults and the tick writes the poll's PR-bound closed marker" ;;
     tests/fm-herdr-lab.test.sh) notes="$notes; HOME is a real short temp directory, not /home/test, and the captured-pipe test checks provision status" ;;
     bin/fm-afk-start.sh|bin/fm-afk-launch.sh|tests/fm-afk-launch.test.sh)
       notes="$notes; fresh away entry also clears, and launch backs up, the watcher's .stale-v3.* hand-off markers; the session-scope test checks housekeeping's status" ;;
-    tests/fm-watch-triage.test.sh) notes="$notes; keep the fork's test_afk_fresh_entry_rehands_an_unchanged_idle_pane" ;;
+    tests/fm-watch-triage-busy.test.sh) notes="$notes; keep the fork's test_afk_fresh_entry_rehands_an_unchanged_idle_pane" ;;
     tests/fm-watch-triage-pause.test.sh) notes="$notes; keep the fork's test_silent_recheck_flag_on_wakes_for_a_blocking_dialog" ;;
     tests/fm-bearings-snapshot.test.sh) notes="$notes; keep the fork's bare-branch PR test in the fm_test_run list" ;;
     docs/configuration.md) notes="$notes; FM_SPAWN_WORKTREE_TIMEOUT and review-comment wording in the environment list" ;;
@@ -140,6 +143,7 @@ hotspot_note() {
   esac
   case "$1" in
     bin/fm-spawn.sh) notes="$notes; backend=t3code refuses a non-empty config/crew-exclude-tools" ;;
+    bin/fm-pr-check.sh) notes="$notes; only a merged retirement blocks scan replacement (pr_check_pr_retired ... merged)" ;;
   esac
   printf '%s' "${notes#; }"
 }
