@@ -110,13 +110,13 @@
 #     instead of waking for them, so the sweep that sees one relaunches the lane;
 #   - with config/auto-land or config/park-on-review, each other idle ship lane
 #     with pr= and an armed merge poll gets one forge read:
-#     a close without merge is reported once (marker
-#     state/.review-park-closed-<id>), and with config/park-on-review a clean
-#     gate parks it.
-# A close is also skipped when the merge poll already reported that PR's
-# closure, and a reported close writes the same PR-bound closed marker the poll
-# writes (fm_pr_poll_degraded_mark_notified in bin/fm-pr-lib.sh), so one closure
-# is one notice whichever path sees it first.
+#     a close without merge is reported once, and with config/park-on-review a
+#     clean gate parks it.
+# A close is reported once per PR: the receipt is the PR-bound closed marker
+# bin/fm-watch.sh's merge poll also writes and checks
+# (fm_pr_poll_degraded_mark_notified in bin/fm-pr-lib.sh), so one closure is
+# one notice whichever path sees it first, and a later PR on the same lane is
+# reported on its own.
 # Relaunch triggers on a parked lane: the head moved, checks failing, changes
 # requested, a merge conflict, any unresolved review thread, or any new
 # comment (inline review-thread replies included), review or note created or
@@ -773,11 +773,8 @@ cmd_run() {
 
 # --- tick ------------------------------------------------------------------
 
-# Prints a close once; the tick writes the markers after recording the wake.
-# The PR-bound closed marker is the receipt bin/fm-watch.sh's closed-PR poll
-# writes too, so whichever path sees a closure first delivers it.
+# Prints a close once; the tick writes the receipt after recording the wake.
 closed_once() {  # <id> <pr>
-  [ ! -e "$STATE/.review-park-closed-$1" ] || return 0
   ! closed_receipt_exists "$1" "$2" || return 0
   printf 'closed %s: PR %s was closed without merging; the lane needs a decision\n' "$1" "$2"
 }
@@ -931,7 +928,6 @@ cmd_tick() {
       "closed "*": PR "*" was closed without merging;"*)
         closed_id=${line#closed }; closed_id=${closed_id%%:*}
         closed_pr=${line#*: PR }; closed_pr=${closed_pr%% was closed without merging;*}
-        : > "$STATE/.review-park-closed-$closed_id"
         closed_receipt_write "$closed_id" "$closed_pr"
         ;;
     esac

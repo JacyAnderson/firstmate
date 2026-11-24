@@ -1204,24 +1204,26 @@ test_land_waits_for_an_action_under_way() {
 # --- the real watcher over a parked lane -----------------------------------
 
 # Arms the lane's canonical merge and review-comment poll (bin/fm-pr-poll.sh)
-# and fronts the world's gh with the reads that poll makes: the PR state from
-# $world/poll.state (OPEN by default) and one new foreign issue comment per
-# read while $world/poll.comments exists. Initializes the comment watermark.
-arm_real_poll() {  # <world>
-  local world=$1
+# on <url> (default $GH_URL) and fronts the world's gh with the reads that poll
+# makes: the PR state from $world/poll.state (OPEN by default) and one new
+# foreign issue comment per read while $world/poll.comments exists.
+# Initializes the comment watermark.
+arm_real_poll() {  # <world> [<url> <number>]
+  local world=$1 url=${2:-$GH_URL} number=${3:-7}
   rm -f "$world/state/lane.check.sh"
   bash -c '. "$1/bin/fm-pr-lib.sh"
-    fm_pr_poll_prepare "$2" lane github "$3" github.com example/repo 7 "$1/bin/fm-pr-poll.sh" && fm_pr_poll_publish_prepared' \
-    _ "$ROOT" "$world/state" "$GH_URL" || fail "setup: could not arm the canonical poll"
-  mv "$world/fakebin/gh" "$world/fakebin/gh.park"
-  cat > "$world/fakebin/gh" <<SH
+    fm_pr_poll_prepare "$2" lane github "$3" github.com example/repo "$4" "$1/bin/fm-pr-poll.sh" && fm_pr_poll_publish_prepared' \
+    _ "$ROOT" "$world/state" "$url" "$number" || fail "setup: could not arm the canonical poll"
+  if [ ! -e "$world/fakebin/gh.park" ]; then
+    mv "$world/fakebin/gh" "$world/fakebin/gh.park"
+    cat > "$world/fakebin/gh" <<SH
 #!/usr/bin/env bash
 case " \$* " in
   *" pr view "*" --json state "*) cat "$world/poll.state" 2>/dev/null || echo OPEN; exit 0 ;;
   *" api user "*) echo fm-bot; exit 0 ;;
   *" --jq .updated_at "*) echo 2026-01-01T00:00:00Z; exit 0 ;;
-  *"/pulls/7/comments?since="*) exit 0 ;;
-  *"/issues/7/comments?since="*)
+  *"/pulls/"*"/comments?since="*) exit 0 ;;
+  *"/issues/"*"/comments?since="*)
     [ -e "$world/poll.comments" ] || exit 0
     n=\$(( \$(cat "$world/poll.comments.n" 2>/dev/null || echo 0) + 1 ))
     printf '%s\n' "\$n" > "$world/poll.comments.n"
@@ -1231,7 +1233,8 @@ case " \$* " in
 esac
 exec "$world/fakebin/gh.park" "\$@"
 SH
-  chmod +x "$world/fakebin/gh"
+    chmod +x "$world/fakebin/gh"
+  fi
   PATH="$world/fakebin:$PATH" bash "$world/state/lane.check.sh" >/dev/null 2>&1 || true
   [ -f "$world/state/lane.pr-comments" ] || fail "setup: the comment watermark was not initialized"
 }
@@ -1312,6 +1315,37 @@ test_parked_closure_is_one_notice_across_poll_and_tick() {
   pass "a parked PR's closure is one durable notice whether the merge poll or the park tick sees it first"
 }
 
+# A lane's closure receipt is per PR: after one PR's closure was reported and
+# the lane moved on, its replacement's closure is reported once too.
+test_replacement_pr_closure_is_reported_after_an_earlier_closure() {
+  local w b_url=https://github.com/example/repo/pull/8
+  w=$(make_world watch-close-replacement "$GH_URL"); gh_fixture "$w/gh.1.json"
+  arm_real_poll "$w"
+  park_world "$w"
+  gh_fixture "$w/gh.1.json" state=CLOSED
+  run_watcher_once "$w"
+  [ "$(grep -c "$GH_URL was closed without merging" "$w/drained.log")" = 1 ] || fail "the first PR's closure was not reported by the tick"
+  run_park "$w" resume lane --trigger "the PR was closed" >/dev/null 2>&1 || fail "resume failed"
+  [ ! -e "$w/state/lane.review-park" ] || fail "resume kept the park record"
+
+  sed -i.bak "s#^pr=.*#pr=$b_url#" "$w/state/lane.meta"
+  printf 'done [at=5]: PR %s checks green\n' "$b_url" >> "$w/state/lane.status"
+  arm_real_poll "$w" "$b_url" 8
+  gh_fixture "$w/gh.1.json"
+  park_world "$w"
+  [ "$(sed -n 's/^pr=//p' "$w/state/lane.review-park")" = "$b_url" ] || fail "the replacement PR did not park"
+  gh_fixture "$w/gh.1.json" state=CLOSED
+  run_watcher_once "$w"
+  [ "$(grep -c "$b_url was closed without merging" "$w/drained.log")" = 1 ] \
+    || fail "the replacement PR's closure was not reported: $(grep -E 'closed' "$w/drained.log" | cut -f5)"
+  echo CLOSED > "$w/poll.state"
+  run_watcher_once "$w"
+  run_watcher_once "$w"
+  [ "$(grep -cE ': closed$|was closed without merging' "$w/drained.log")" = 2 ] \
+    || fail "closure notices: $(grep -E ': closed$|was closed without merging' "$w/drained.log" | cut -f5)"
+  pass "a replacement PR's closure is reported once after an earlier PR's closure on the same lane"
+}
+
 fm_test_run \
   test_github_gate_clean_and_each_unclean_condition \
   test_github_gate_refuses_until_every_required_check_reports \
@@ -1348,4 +1382,5 @@ fm_test_run \
   test_reports_survive_until_their_wake_is_recorded \
   test_land_waits_for_an_action_under_way \
   test_watcher_relaunches_a_parked_lane_in_the_sweep_that_sees_a_comment \
-  test_parked_closure_is_one_notice_across_poll_and_tick
+  test_parked_closure_is_one_notice_across_poll_and_tick \
+  test_replacement_pr_closure_is_reported_after_an_earlier_closure
